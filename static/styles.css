@@ -1,0 +1,245 @@
+﻿:root {
+  --bg: #f6f8fc;
+  --panel: #ffffff;
+  --text: #1c2430;
+  --muted: #5f6b7a;
+  --line: #d9e1ee;
+  --brand: #1268d4;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: linear-gradient(140deg, #edf4ff 0%, #f8fbff 50%, #f2f6ff 100%);
+  color: var(--text);
+}
+
+.container {
+  width: min(1200px, 95vw);
+  margin: 24px auto 40px;
+}
+
+h1 { margin: 0 0 8px; }
+h2 { margin: 26px 0 10px; }
+
+.hint { color: var(--muted); margin: 0 0 18px; }
+
+.toolbar {
+  display: grid;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: 1fr 180px;
+  gap: 10px;
+  align-items: end;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.symbol-row {
+  display: grid;
+  grid-template-columns: 160px 1fr 120px;
+  gap: 10px;
+  align-items: center;
+}
+
+.actions-row {
+  display: grid;
+  grid-template-columns: repeat(3, 140px);
+  gap: 10px;
+}
+
+input, select, button {
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid #c3cee2;
+  font-size: 14px;
+}
+
+input, select { padding: 0 10px; }
+
+button {
+  background: var(--brand);
+  color: #fff;
+  cursor: pointer;
+  border: none;
+}
+
+button:disabled {
+  background: #9db6db;
+  cursor: not-allowed;
+}
+
+.chips-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 50px;
+  padding: 8px;
+  background: #fbfdff;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #e6f0ff;
+  color: #124a96;
+  border: 1px solid #bfd7ff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chip-del {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: #c6dcff;
+  color: #0f3f85;
+  line-height: 20px;
+  padding: 0;
+}
+
+.chip-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+th, td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+th:first-child, td:first-child { text-align: left; font-weight: 600; }
+tr:last-child td { border-bottom: none; }
+
+.ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+#status { color: var(--muted); font-size: 14px; }
+
+.md-preview {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  min-height: 180px;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+
+.md-preview h1,
+.md-preview h2,
+.md-preview h3,
+.md-preview h4 {
+  margin: 10px 0 8px;
+}
+
+.md-preview p {
+  margin: 8px 0;
+}
+
+.md-preview ul,
+.md-preview ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.md-preview li {
+  margin: 4px 0;
+}
+
+.md-preview blockquote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 4px solid #b7cff5;
+  background: #f7fbff;
+  color: #37485f;
+}
+
+.md-preview code {
+  background: #eef4ff;
+  border: 1px solid #d7e5ff;
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 13px;
+}
+
+.md-preview pre {
+  background: #0f1a2b;
+  color: #d9e6ff;
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.md-preview pre code {
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0;
+}
+
+.md-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  min-width: 520px;
+}
+
+.md-preview th,
+.md-preview td {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+  white-space: normal;
+}
+
+@media (max-width: 980px) {
+  .config-grid,
+  .field-row,
+  .symbol-row,
+  .actions-row {
+    grid-template-columns: 1fr;
+  }
+}

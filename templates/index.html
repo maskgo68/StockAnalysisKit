@@ -1,0 +1,97 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>美股对比分析</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <main class="container" id="capture-target">
+    <h1>美股自动对比分析</h1>
+    <p class="hint">数据源：第1/2部分 Finnhub，第3部分 Yahoo Finance 页面爬虫；金额单位统一为十亿美元（B USD）。</p>
+
+    <section class="toolbar">
+      <div class="symbol-row">
+        <label for="new-symbol">添加股票代码</label>
+        <input id="new-symbol" placeholder="例如 AMAT" />
+        <button id="add-symbol-btn" type="button">添加股票</button>
+      </div>
+
+      <div class="chips-wrap">
+        <div id="symbol-chips" class="chips"></div>
+      </div>
+
+      <div class="actions-row">
+        <button id="refresh-btn" type="button">刷新数据</button>
+        <button id="export-btn" type="button">导出Excel</button>
+        <button id="screenshot-btn" type="button">截屏下载</button>
+      </div>
+
+      <input id="symbols" name="symbols" type="hidden" value="{{ default_symbols }}" />
+    </section>
+
+    <section>
+      <h2>1) 目前行情数据</h2>
+      <div class="table-wrap"><table id="realtime-table"></table></div>
+    </section>
+
+    <section>
+      <h2>2) 历史财务数据</h2>
+      <div class="table-wrap"><table id="financial-table"></table></div>
+    </section>
+
+    <section>
+      <h2>3) 预测与估值数据</h2>
+      <div class="table-wrap"><table id="forecast-table"></table></div>
+    </section>
+
+    <section>
+      <h2>AI 投资建议</h2>
+      <div class="ai-actions">
+        <button id="ai-btn" type="button" disabled>生成 AI 综合建议</button>
+        <span id="status"></span>
+      </div>
+      <div id="ai-output" class="md-preview">请先抓取数据，再生成建议。</div>
+    </section>
+
+    <section class="toolbar">
+      <h2>API 配置</h2>
+      <div class="config-grid">
+        <div class="field-row">
+          <label for="finnhub-api-key">Finnhub API Key</label>
+          <input id="finnhub-api-key" type="password" placeholder="粘贴 Finnhub Key" autocomplete="off" />
+        </div>
+        <button id="test-finnhub-btn" type="button">测试 Finnhub 配置</button>
+
+        <div class="field-row">
+          <label for="ai-provider">AI Provider</label>
+          <select id="ai-provider">
+            <option value="openai">OpenAI 兼容</option>
+            <option value="gemini">Gemini</option>
+            <option value="claude">Claude</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label for="ai-model">AI 模型</label>
+          <input id="ai-model" type="text" placeholder="例如 gpt-4.1-mini" autocomplete="off" />
+        </div>
+        <div class="field-row">
+          <label for="ai-base-url">OpenAI 兼容 Base URL</label>
+          <input id="ai-base-url" type="text" placeholder="默认 https://api.openai.com/v1" autocomplete="off" />
+        </div>
+        <div class="field-row">
+          <label for="ai-api-key">AI API Key</label>
+          <input id="ai-api-key" type="password" placeholder="粘贴 AI Key" autocomplete="off" />
+        </div>
+        <button id="test-ai-btn" type="button">测试 AI 配置</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
