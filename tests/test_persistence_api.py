@@ -152,7 +152,7 @@ def test_export_excel_allows_empty_finnhub_key(monkeypatch):
     assert resp.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def test_export_excel_forecast_sheet_includes_ev_ebitda_and_ps_columns():
+def test_export_excel_has_separate_prediction_and_valuation_sheets():
     stream = app._build_excel_file(
         stocks=[
             {
@@ -175,16 +175,23 @@ def test_export_excel_forecast_sheet_includes_ev_ebitda_and_ps_columns():
         symbols=["NVDA"],
     )
 
-    forecast_df = pd.read_excel(stream, sheet_name="forecast")
+    xls = pd.ExcelFile(stream)
+    assert "prediction" in xls.sheet_names
+    assert "valuation" in xls.sheet_names
 
-    assert "EV/EBITDA" in forecast_df.columns
-    assert "P/S (TTM)" in forecast_df.columns
-    assert "预测EPS(Next Year)" in forecast_df.columns
-    assert float(forecast_df.loc[0, "预测EPS(Next Year)"]) == 5.4
-    assert float(forecast_df.loc[0, "EV/EBITDA"]) == 20.5
-    assert float(forecast_df.loc[0, "P/S (TTM)"]) == 12.3
+    prediction_df = pd.read_excel(stream, sheet_name="prediction")
+    stream.seek(0)
+    valuation_df = pd.read_excel(stream, sheet_name="valuation")
 
-    cols = list(forecast_df.columns)
+    assert "预测EPS(Next Year)" in prediction_df.columns
+    assert float(prediction_df.loc[0, "预测EPS(Next Year)"]) == 5.4
+
+    assert "EV/EBITDA" in valuation_df.columns
+    assert "P/S (TTM)" in valuation_df.columns
+    assert float(valuation_df.loc[0, "EV/EBITDA"]) == 20.5
+    assert float(valuation_df.loc[0, "P/S (TTM)"]) == 12.3
+
+    cols = list(prediction_df.columns)
     assert cols.index("预测EPS(USD/股)") < cols.index("预测EPS(Next Year)") < cols.index("下季度预测EPS(USD/股)")
 
 

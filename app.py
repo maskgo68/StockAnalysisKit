@@ -205,7 +205,25 @@ def _build_excel_file(stocks, symbols):
 
     realtime_df = pd.DataFrame(_build_export_rows(stocks, "realtime", realtime_map))
     financial_df = pd.DataFrame(_build_export_rows(stocks, "financial", financial_map))
-    forecast_df = pd.DataFrame(_build_export_rows(stocks, "forecast", forecast_map))
+    prediction_fields = (
+        "eps_forecast",
+        "next_year_eps_forecast",
+        "next_quarter_eps_forecast",
+        "next_earnings_date",
+    )
+    valuation_fields = (
+        "forward_pe",
+        "peg",
+        "ev_to_ebitda",
+        "ps",
+        "pb",
+    )
+
+    prediction_map = {key: forecast_map[key] for key in prediction_fields}
+    valuation_map = {key: forecast_map[key] for key in valuation_fields}
+
+    prediction_df = pd.DataFrame(_build_export_rows(stocks, "forecast", prediction_map))
+    valuation_df = pd.DataFrame(_build_export_rows(stocks, "forecast", valuation_map))
     meta_df = pd.DataFrame(
         [
             {
@@ -220,7 +238,8 @@ def _build_excel_file(stocks, symbols):
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         realtime_df.to_excel(writer, index=False, sheet_name="realtime")
         financial_df.to_excel(writer, index=False, sheet_name="financial")
-        forecast_df.to_excel(writer, index=False, sheet_name="forecast")
+        prediction_df.to_excel(writer, index=False, sheet_name="prediction")
+        valuation_df.to_excel(writer, index=False, sheet_name="valuation")
         meta_df.to_excel(writer, index=False, sheet_name="meta")
     output.seek(0)
     return output
