@@ -840,6 +840,44 @@ def test_generate_financial_analysis_keeps_reference_header_suffix_plain_text(mo
     assert text.strip() == "5. 参考来源（近60天）\n1. Intel, AMD Warn China Customers Of Months-Long CPU Delays, Yahoo Finance/Reuters, 2026-02-07."
 
 
+def test_run_ai_with_auto_continue_returns_error_for_unsupported_provider():
+    text, err = stock_service._run_ai_with_auto_continue(
+        provider="unknown",
+        prompt="p",
+        api_key="k",
+        model="m",
+        continue_prompt="继续",
+    )
+
+    assert text == ""
+    assert err == "不支持的 AI Provider: unknown"
+
+
+def test_run_ai_with_auto_continue_auto_continues_on_truncation(monkeypatch):
+    prompts = []
+
+    def fake_call(provider_key, prompt, api_key, model, base_url=None, enable_model_search=True):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return "first part", "length"
+        return "second part", "stop"
+
+    monkeypatch.setattr(stock_service, "_call_ai_once_with_search_flag", fake_call, raising=False)
+
+    text, err = stock_service._run_ai_with_auto_continue(
+        provider="openai",
+        prompt="start prompt",
+        api_key="k",
+        model="m",
+        continue_prompt="continue prompt",
+        enable_model_search=False,
+    )
+
+    assert err is None
+    assert text == "first part\n\nsecond part"
+    assert prompts == ["start prompt", "continue prompt"]
+
+
 def test_reference_links_do_not_fall_back_to_google_search_when_unmatched():
     text = """## 参考来源
 1. Completely Unrelated Headline, Unknown, 2026-02-01.

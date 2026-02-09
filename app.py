@@ -233,6 +233,53 @@ def _symbols_from_payload(payload):
     return parse_symbols(str(symbols_raw or ""))
 
 
+def _build_analysis_request_context(payload):
+    payload = payload or {}
+    return {
+        "symbols": _symbols_from_payload(payload),
+        "finnhub_api_key": str(payload.get("finnhub_api_key", "")).strip(),
+        "force_refresh_financial": _is_truthy(payload.get("force_financial_refresh")),
+        "provider": str(payload.get("provider", "gemini")).strip().lower(),
+        "api_key": str(payload.get("api_key", "")).strip(),
+        "model": str(payload.get("model", "")).strip(),
+        "base_url": str(payload.get("base_url", "")).strip() or None,
+        "exa_api_key": _payload_or_env(payload, "exa_api_key", "EXA_API_KEY"),
+        "tavily_api_key": _payload_or_env(payload, "tavily_api_key", "TAVILY_API_KEY"),
+    }
+
+
+def _stocks_need_ai_context(stocks):
+    return any(
+        not isinstance((stock or {}).get("ai_financial_context"), dict)
+        or not (stock or {}).get("ai_financial_context", {}).get("annual")
+        or not (stock or {}).get("ai_financial_context", {}).get("quarterly")
+        for stock in stocks
+        if isinstance(stock, dict)
+    )
+
+
+def _fetch_analysis_stocks(context):
+    return _fetch_multiple_stocks_compat(
+        context.get("symbols", []),
+        context.get("finnhub_api_key", ""),
+        force_refresh_financial=context.get("force_refresh_financial", False),
+        exa_api_key=context.get("exa_api_key"),
+        tavily_api_key=context.get("tavily_api_key"),
+        ai_provider=context.get("provider"),
+        ai_api_key=context.get("api_key"),
+        ai_model=context.get("model"),
+        ai_base_url=context.get("base_url"),
+    )
+
+
+def _resolve_analysis_stocks(context, stocks=None, require_ai_context=False):
+    if not isinstance(stocks, list) or not stocks:
+        return _fetch_analysis_stocks(context)
+    if require_ai_context and _stocks_need_ai_context(stocks):
+        return _fetch_analysis_stocks(context)
+    return stocks
+
+
 @app.get("/")
 def index():
     return render_template("index.html", default_symbols="")
@@ -298,67 +345,29 @@ def export_excel():
 @app.post("/api/ai-analysis")
 def ai_analysis():
     payload = request.get_json(silent=True) or {}
-    symbols = _symbols_from_payload(payload)
-    finnhub_api_key = str(payload.get("finnhub_api_key", "")).strip()
-    force_refresh_financial = _is_truthy(payload.get("force_financial_refresh"))
-    exa_api_key = _payload_or_env(payload, "exa_api_key", "EXA_API_KEY")
-    tavily_api_key = _payload_or_env(payload, "tavily_api_key", "TAVILY_API_KEY")
-    provider = str(payload.get("provider", "gemini")).strip().lower()
-    api_key = str(payload.get("api_key", "")).strip()
-    model = str(payload.get("model", "")).strip()
-    base_url = str(payload.get("base_url", "")).strip() or None
-
-    stocks = payload.get("stocks")
-    if not isinstance(stocks, list) or not stocks:
-        stocks = _fetch_multiple_stocks_compat(
-            symbols,
-            finnhub_api_key,
-            force_refresh_financial=force_refresh_financial,
-            exa_api_key=exa_api_key,
-            tavily_api_key=tavily_api_key,
-            ai_provider=provider,
-            ai_api_key=api_key,
-            ai_model=model,
-            ai_base_url=base_url,
-        )
-    else:
-        # AI 分析阶段保证补齐后台财务上下文（近3年年报 + 近4季季报），不影响前端第2部分展示字段。
-        missing_ai_context = any(
-            not isinstance((stock or {}).get("ai_financial_context"), dict)
-            or not (stock or {}).get("ai_financial_context", {}).get("annual")
-            or not (stock or {}).get("ai_financial_context", {}).get("quarterly")
-            for stock in stocks
-            if isinstance(stock, dict)
-        )
-        if missing_ai_context:
-            stocks = _fetch_multiple_stocks_compat(
-                symbols,
-                finnhub_api_key,
-                force_refresh_financial=force_refresh_financial,
-                exa_api_key=exa_api_key,
-                tavily_api_key=tavily_api_key,
-                ai_provider=provider,
-                ai_api_key=api_key,
-                ai_model=model,
-                ai_base_url=base_url,
-            )
+    context = _build_analysis_request_context(payload)
+    stocks = _resolve_analysis_stocks(
+        context=context,
+        stocks=payload.get("stocks"),
+        require_ai_context=True,
+    )
 
     analysis = generate_ai_investment_advice(
-        symbols=symbols,
+        symbols=context["symbols"],
         stocks=stocks,
-        provider=provider,
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
-        exa_api_key=exa_api_key,
-        tavily_api_key=tavily_api_key,
+        provider=context["provider"],
+        api_key=context["api_key"],
+        model=context["model"],
+        base_url=context["base_url"],
+        exa_api_key=context["exa_api_key"],
+        tavily_api_key=context["tavily_api_key"],
     )
 
     return jsonify(
         {
-            "symbols": symbols,
-            "provider": provider,
-            "model": model,
+            "symbols": context["symbols"],
+            "provider": context["provider"],
+            "model": context["model"],
             "analysis": analysis,
         }
     )
@@ -367,46 +376,29 @@ def ai_analysis():
 @app.post("/api/financial-analysis")
 def financial_analysis():
     payload = request.get_json(silent=True) or {}
-    symbols = _symbols_from_payload(payload)
-    finnhub_api_key = str(payload.get("finnhub_api_key", "")).strip()
-    force_refresh_financial = _is_truthy(payload.get("force_financial_refresh"))
-    provider = str(payload.get("provider", "gemini")).strip().lower()
-    api_key = str(payload.get("api_key", "")).strip()
-    model = str(payload.get("model", "")).strip()
-    base_url = str(payload.get("base_url", "")).strip() or None
-    exa_api_key = _payload_or_env(payload, "exa_api_key", "EXA_API_KEY")
-    tavily_api_key = _payload_or_env(payload, "tavily_api_key", "TAVILY_API_KEY")
-
-    stocks = payload.get("stocks")
-    if not isinstance(stocks, list) or not stocks:
-        stocks = _fetch_multiple_stocks_compat(
-            symbols,
-            finnhub_api_key,
-            force_refresh_financial=force_refresh_financial,
-            exa_api_key=exa_api_key,
-            tavily_api_key=tavily_api_key,
-            ai_provider=provider,
-            ai_api_key=api_key,
-            ai_model=model,
-            ai_base_url=base_url,
-        )
+    context = _build_analysis_request_context(payload)
+    stocks = _resolve_analysis_stocks(
+        context=context,
+        stocks=payload.get("stocks"),
+        require_ai_context=False,
+    )
 
     analysis = generate_financial_analysis(
-        symbols=symbols,
+        symbols=context["symbols"],
         stocks=stocks,
-        provider=provider,
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
-        exa_api_key=exa_api_key,
-        tavily_api_key=tavily_api_key,
+        provider=context["provider"],
+        api_key=context["api_key"],
+        model=context["model"],
+        base_url=context["base_url"],
+        exa_api_key=context["exa_api_key"],
+        tavily_api_key=context["tavily_api_key"],
     )
     return jsonify(
         {
-            "symbols": symbols,
+            "symbols": context["symbols"],
             "analysis": analysis,
-            "provider": provider if api_key and model else None,
-            "model": model if api_key and model else None,
+            "provider": context["provider"] if context["api_key"] and context["model"] else None,
+            "model": context["model"] if context["api_key"] and context["model"] else None,
         }
     )
 
@@ -414,66 +406,29 @@ def financial_analysis():
 @app.post("/api/target-price-analysis")
 def target_price_analysis():
     payload = request.get_json(silent=True) or {}
-    symbols = _symbols_from_payload(payload)
-    finnhub_api_key = str(payload.get("finnhub_api_key", "")).strip()
-    force_refresh_financial = _is_truthy(payload.get("force_financial_refresh"))
-    provider = str(payload.get("provider", "gemini")).strip().lower()
-    api_key = str(payload.get("api_key", "")).strip()
-    model = str(payload.get("model", "")).strip()
-    base_url = str(payload.get("base_url", "")).strip() or None
-    exa_api_key = _payload_or_env(payload, "exa_api_key", "EXA_API_KEY")
-    tavily_api_key = _payload_or_env(payload, "tavily_api_key", "TAVILY_API_KEY")
-
-    stocks = payload.get("stocks")
-    if not isinstance(stocks, list) or not stocks:
-        stocks = _fetch_multiple_stocks_compat(
-            symbols,
-            finnhub_api_key,
-            force_refresh_financial=force_refresh_financial,
-            exa_api_key=exa_api_key,
-            tavily_api_key=tavily_api_key,
-            ai_provider=provider,
-            ai_api_key=api_key,
-            ai_model=model,
-            ai_base_url=base_url,
-        )
-    else:
-        missing_ai_context = any(
-            not isinstance((stock or {}).get("ai_financial_context"), dict)
-            or not (stock or {}).get("ai_financial_context", {}).get("annual")
-            or not (stock or {}).get("ai_financial_context", {}).get("quarterly")
-            for stock in stocks
-            if isinstance(stock, dict)
-        )
-        if missing_ai_context:
-            stocks = _fetch_multiple_stocks_compat(
-                symbols,
-                finnhub_api_key,
-                force_refresh_financial=force_refresh_financial,
-                exa_api_key=exa_api_key,
-                tavily_api_key=tavily_api_key,
-                ai_provider=provider,
-                ai_api_key=api_key,
-                ai_model=model,
-                ai_base_url=base_url,
-            )
+    context = _build_analysis_request_context(payload)
+    stocks = _resolve_analysis_stocks(
+        context=context,
+        stocks=payload.get("stocks"),
+        require_ai_context=True,
+    )
 
     analysis = generate_target_price_analysis(
-        symbols=symbols,
+        symbols=context["symbols"],
         stocks=stocks,
-        provider=provider,
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
-        exa_api_key=exa_api_key,
-        tavily_api_key=tavily_api_key,
+        provider=context["provider"],
+        api_key=context["api_key"],
+        model=context["model"],
+        base_url=context["base_url"],
+        exa_api_key=context["exa_api_key"],
+        tavily_api_key=context["tavily_api_key"],
     )
     return jsonify(
         {
-            "symbols": symbols,
+            "symbols": context["symbols"],
             "analysis": analysis,
-            "provider": provider if api_key and model else None,
-            "model": model if api_key and model else None,
+            "provider": context["provider"] if context["api_key"] and context["model"] else None,
+            "model": context["model"] if context["api_key"] and context["model"] else None,
         }
     )
 
@@ -485,31 +440,22 @@ def financial_analysis_followup():
     if not question:
         return jsonify({"error": "追问内容不能为空。"}), 400
 
-    symbols = _symbols_from_payload(payload)
-    finnhub_api_key = str(payload.get("finnhub_api_key", "")).strip()
-    force_refresh_financial = _is_truthy(payload.get("force_financial_refresh"))
-    provider = str(payload.get("provider", "gemini")).strip().lower()
-    api_key = str(payload.get("api_key", "")).strip()
-    model = str(payload.get("model", "")).strip()
-    base_url = str(payload.get("base_url", "")).strip() or None
+    context = _build_analysis_request_context(payload)
     base_analysis = str(payload.get("base_analysis", "")).strip()
     history = payload.get("history")
-
-    stocks = payload.get("stocks")
-    if not isinstance(stocks, list) or not stocks:
-        stocks = _fetch_multiple_stocks_compat(
-            symbols,
-            finnhub_api_key,
-            force_refresh_financial=force_refresh_financial,
-        )
+    stocks = _resolve_analysis_stocks(
+        context=context,
+        stocks=payload.get("stocks"),
+        require_ai_context=False,
+    )
 
     answer = generate_financial_analysis_followup(
-        symbols=symbols,
+        symbols=context["symbols"],
         stocks=stocks,
-        provider=provider,
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
+        provider=context["provider"],
+        api_key=context["api_key"],
+        model=context["model"],
+        base_url=context["base_url"],
         base_analysis=base_analysis,
         history=history,
         question=question,
@@ -517,9 +463,9 @@ def financial_analysis_followup():
 
     return jsonify(
         {
-            "symbols": symbols,
-            "provider": provider,
-            "model": model,
+            "symbols": context["symbols"],
+            "provider": context["provider"],
+            "model": context["model"],
             "answer": answer,
         }
     )
@@ -532,45 +478,22 @@ def ai_analysis_followup():
     if not question:
         return jsonify({"error": "追问内容不能为空。"}), 400
 
-    symbols = _symbols_from_payload(payload)
-    finnhub_api_key = str(payload.get("finnhub_api_key", "")).strip()
-    force_refresh_financial = _is_truthy(payload.get("force_financial_refresh"))
-    provider = str(payload.get("provider", "gemini")).strip().lower()
-    api_key = str(payload.get("api_key", "")).strip()
-    model = str(payload.get("model", "")).strip()
-    base_url = str(payload.get("base_url", "")).strip() or None
+    context = _build_analysis_request_context(payload)
     base_analysis = str(payload.get("base_analysis", "")).strip()
     history = payload.get("history")
-
-    stocks = payload.get("stocks")
-    if not isinstance(stocks, list) or not stocks:
-        stocks = _fetch_multiple_stocks_compat(
-            symbols,
-            finnhub_api_key,
-            force_refresh_financial=force_refresh_financial,
-        )
-    else:
-        missing_ai_context = any(
-            not isinstance((stock or {}).get("ai_financial_context"), dict)
-            or not (stock or {}).get("ai_financial_context", {}).get("annual")
-            or not (stock or {}).get("ai_financial_context", {}).get("quarterly")
-            for stock in stocks
-            if isinstance(stock, dict)
-        )
-        if missing_ai_context:
-            stocks = _fetch_multiple_stocks_compat(
-                symbols,
-                finnhub_api_key,
-                force_refresh_financial=force_refresh_financial,
-            )
+    stocks = _resolve_analysis_stocks(
+        context=context,
+        stocks=payload.get("stocks"),
+        require_ai_context=True,
+    )
 
     answer = generate_ai_investment_followup(
-        symbols=symbols,
+        symbols=context["symbols"],
         stocks=stocks,
-        provider=provider,
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
+        provider=context["provider"],
+        api_key=context["api_key"],
+        model=context["model"],
+        base_url=context["base_url"],
         base_analysis=base_analysis,
         history=history,
         question=question,
@@ -578,9 +501,9 @@ def ai_analysis_followup():
 
     return jsonify(
         {
-            "symbols": symbols,
-            "provider": provider,
-            "model": model,
+            "symbols": context["symbols"],
+            "provider": context["provider"],
+            "model": context["model"],
             "answer": answer,
         }
     )

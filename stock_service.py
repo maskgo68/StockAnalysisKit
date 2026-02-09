@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import os
 import re
@@ -14,6 +15,8 @@ try:
     import yfinance as yf
 except Exception:
     yf = None
+
+LOGGER = logging.getLogger(__name__)
 
 HEADERS = {
     "User-Agent": (
@@ -3148,36 +3151,19 @@ def _generate_financial_analysis_with_ai(
     )
     prompt = _build_financial_analysis_prompt(symbols, stocks, external_search_context=external_search_context)
     if not prompt:
-        return ""
+        return "", "缺少可分析的股票上下文。"
     if not api_key or not model:
-        return ""
+        return "", "未配置 AI API Key 或模型名。"
 
-    provider_key = (provider or "").strip().lower()
-    if provider_key not in {"openai", "gemini", "claude"}:
-        return ""
-
-    try:
-        full_text = ""
-        next_prompt = prompt
-        enable_model_search = not bool(str(external_search_context or "").strip())
-        for _ in range(AI_AUTO_CONTINUE_MAX_ROUNDS):
-            text, finish_reason = _call_ai_once_with_search_flag(
-                provider_key,
-                next_prompt,
-                api_key,
-                model,
-                base_url,
-                enable_model_search=enable_model_search,
-            )
-            text = (text or "").strip()
-            if text:
-                full_text = (full_text + "\n\n" + text).strip() if full_text else text
-            if not _is_truncated_reason(finish_reason):
-                break
-            next_prompt = "继续未完成部分，不要重复已输出内容，完成到最后的“总体结论”和“参考来源”。"
-        return full_text.strip()
-    except Exception:
-        return ""
+    return _run_ai_with_auto_continue(
+        provider=provider,
+        prompt=prompt,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        enable_model_search=not bool(str(external_search_context or "").strip()),
+        continue_prompt="继续未完成部分，不要重复已输出内容，完成到最后的“总体结论”和“参考来源”。",
+    )
 
 
 def generate_financial_analysis(
@@ -3193,7 +3179,7 @@ def generate_financial_analysis(
     local_text = _generate_financial_analysis_local(symbols, stocks)
     if api_key and model:
         try:
-            ai_text = _generate_financial_analysis_with_ai(
+            ai_result = _generate_financial_analysis_with_ai(
                 symbols=symbols,
                 stocks=stocks,
                 provider=provider,
@@ -3207,7 +3193,7 @@ def generate_financial_analysis(
             # 测试替身可能仍是旧签名，不接受新增参数。
             if "exa_api_key" not in str(exc) and "tavily_api_key" not in str(exc):
                 raise
-            ai_text = _generate_financial_analysis_with_ai(
+            ai_result = _generate_financial_analysis_with_ai(
                 symbols=symbols,
                 stocks=stocks,
                 provider=provider,
@@ -3215,8 +3201,16 @@ def generate_financial_analysis(
                 model=model,
                 base_url=base_url,
             )
+        if isinstance(ai_result, tuple):
+            ai_text = str(ai_result[0] or "")
+            ai_error = str(ai_result[1] or "")
+        else:
+            ai_text = str(ai_result or "")
+            ai_error = ""
         if str(ai_text or "").strip():
             return _ensure_reference_links(ai_text, stocks=stocks)
+        if ai_error:
+            LOGGER.warning("AI financial analysis failed, fallback to local: %s", ai_error)
     return local_text
 
 
@@ -3532,25 +3526,18 @@ def _generate_followup_response(prompt, stocks, provider, api_key, model, base_u
     if not prompt:
         return "缺少可分析的股票上下文，无法继续追问。"
 
-    try:
-        provider_key = (provider or "").strip().lower()
-        if provider_key not in {"openai", "gemini", "claude"}:
-            return f"不支持的 AI Provider: {provider}"
-
-        full_text = ""
-        next_prompt = prompt
-        for _ in range(AI_AUTO_CONTINUE_MAX_ROUNDS):
-            text, finish_reason = _call_ai_once(provider_key, next_prompt, api_key, model, base_url)
-            text = (text or "").strip()
-            if text:
-                full_text = (full_text + "\n\n" + text).strip() if full_text else text
-            if not _is_truncated_reason(finish_reason):
-                break
-            next_prompt = "继续未完成的部分，只补充未输出内容，不要重复前文。"
-
-        return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
-    except Exception as exc:
-        return f"AI 调用失败: {exc}"
+    full_text, err = _run_ai_with_auto_continue(
+        provider=provider,
+        prompt=prompt,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        enable_model_search=True,
+        continue_prompt="继续未完成的部分，只补充未输出内容，不要重复前文。",
+    )
+    if err:
+        return err
+    return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
 
 
 def generate_financial_analysis_followup(
@@ -3774,6 +3761,47 @@ def _is_truncated_reason(reason):
     return r in {"length", "max_tokens", "token_limit", "max_output_tokens", "model_length"}
 
 
+def _run_ai_with_auto_continue(
+    provider,
+    prompt,
+    api_key,
+    model,
+    base_url=None,
+    enable_model_search=True,
+    continue_prompt="继续未完成的部分，只补充未输出内容，不要重复前文。",
+):
+    provider_key = (provider or "").strip().lower()
+    if provider_key not in {"openai", "gemini", "claude"}:
+        return "", f"不支持的 AI Provider: {provider}"
+
+    full_text = ""
+    next_prompt = str(prompt or "").strip()
+    if not next_prompt:
+        return "", "缺少可分析的股票上下文。"
+
+    try:
+        for _ in range(AI_AUTO_CONTINUE_MAX_ROUNDS):
+            text, finish_reason = _call_ai_once_with_search_flag(
+                provider_key,
+                next_prompt,
+                api_key,
+                model,
+                base_url,
+                enable_model_search=enable_model_search,
+            )
+            text = (text or "").strip()
+            if text:
+                full_text = (full_text + "\n\n" + text).strip() if full_text else text
+
+            if not _is_truncated_reason(finish_reason):
+                break
+            next_prompt = continue_prompt
+    except Exception as exc:
+        return "", f"AI 调用失败: {exc}"
+
+    return full_text.strip(), None
+
+
 def generate_ai_investment_advice(
     symbols,
     stocks,
@@ -3800,40 +3828,21 @@ def generate_ai_investment_advice(
     if not prompt:
         return "缺少可分析的股票上下文，无法生成建议。"
 
-    try:
-        provider_key = (provider or "").strip().lower()
-        if provider_key not in {"openai", "gemini", "claude"}:
-            return f"不支持的 AI Provider: {provider}"
-
-        full_text = ""
-        next_prompt = prompt
-        enable_model_search = not bool(str(external_search_context or "").strip())
-
-        # 自动续写，直到非截断结束；默认上限较高，尽量避免本地提前截断。
-        for _ in range(AI_AUTO_CONTINUE_MAX_ROUNDS):
-            text, finish_reason = _call_ai_once_with_search_flag(
-                provider_key,
-                next_prompt,
-                api_key,
-                model,
-                base_url,
-                enable_model_search=enable_model_search,
-            )
-            text = (text or "").strip()
-            if text:
-                full_text = (full_text + "\n\n" + text).strip() if full_text else text
-
-            if not _is_truncated_reason(finish_reason):
-                break
-
-            next_prompt = (
-                "你刚才的回答因为长度限制被截断了。请只继续未完成的部分，"
-                "不要重复已经写过的内容，并写到完整收尾。"
-            )
-
-        return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
-    except Exception as exc:
-        return f"AI 调用失败: {exc}"
+    full_text, err = _run_ai_with_auto_continue(
+        provider=provider,
+        prompt=prompt,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        enable_model_search=not bool(str(external_search_context or "").strip()),
+        continue_prompt=(
+            "你刚才的回答因为长度限制被截断了。请只继续未完成的部分，"
+            "不要重复已经写过的内容，并写到完整收尾。"
+        ),
+    )
+    if err:
+        return err
+    return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
 
 
 def generate_target_price_analysis(
@@ -3862,39 +3871,21 @@ def generate_target_price_analysis(
     if not prompt:
         return "缺少可分析的股票上下文，无法生成目标价分析。"
 
-    try:
-        provider_key = (provider or "").strip().lower()
-        if provider_key not in {"openai", "gemini", "claude"}:
-            return f"不支持的 AI Provider: {provider}"
-
-        full_text = ""
-        next_prompt = prompt
-        enable_model_search = not bool(str(external_search_context or "").strip())
-
-        for _ in range(AI_AUTO_CONTINUE_MAX_ROUNDS):
-            text, finish_reason = _call_ai_once_with_search_flag(
-                provider_key,
-                next_prompt,
-                api_key,
-                model,
-                base_url,
-                enable_model_search=enable_model_search,
-            )
-            text = (text or "").strip()
-            if text:
-                full_text = (full_text + "\n\n" + text).strip() if full_text else text
-
-            if not _is_truncated_reason(finish_reason):
-                break
-
-            next_prompt = (
-                "你刚才的回答因为长度限制被截断了。请只继续未完成的部分，"
-                "不要重复已经写过的内容，并写到完整收尾。"
-            )
-
-        return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
-    except Exception as exc:
-        return f"AI 调用失败: {exc}"
+    full_text, err = _run_ai_with_auto_continue(
+        provider=provider,
+        prompt=prompt,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        enable_model_search=not bool(str(external_search_context or "").strip()),
+        continue_prompt=(
+            "你刚才的回答因为长度限制被截断了。请只继续未完成的部分，"
+            "不要重复已经写过的内容，并写到完整收尾。"
+        ),
+    )
+    if err:
+        return err
+    return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
 
 
 def test_finnhub_api_key(api_key):

@@ -579,3 +579,77 @@ def test_test_config_uses_tavily_key_from_env(monkeypatch):
 
     assert resp.status_code == 200
     assert captured["api_key"] == "tavily-env"
+
+
+def test_build_analysis_request_context_reads_payload_and_env(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "exa-env")
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-env")
+
+    ctx = app._build_analysis_request_context(
+        {
+            "symbols": ["nvda", "amd"],
+            "finnhub_api_key": "fin",
+            "provider": "openai",
+            "api_key": "k",
+            "model": "m",
+        }
+    )
+
+    assert ctx["symbols"] == ["NVDA", "AMD"]
+    assert ctx["finnhub_api_key"] == "fin"
+    assert ctx["provider"] == "openai"
+    assert ctx["api_key"] == "k"
+    assert ctx["model"] == "m"
+    assert ctx["exa_api_key"] == "exa-env"
+    assert ctx["tavily_api_key"] == "tavily-env"
+
+
+def test_resolve_analysis_stocks_refetches_when_ai_context_missing(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_fetch(
+        symbols,
+        finnhub_api_key,
+        force_refresh_financial=False,
+        exa_api_key=None,
+        tavily_api_key=None,
+        ai_provider=None,
+        ai_api_key=None,
+        ai_model=None,
+        ai_base_url=None,
+    ):
+        calls["count"] += 1
+        return [
+            {
+                "symbol": "NVDA",
+                "ai_financial_context": {
+                    "annual": [{"period_end": "2025-12-31"}],
+                    "quarterly": [{"period_end": "2025-09-30"}],
+                },
+            }
+        ]
+
+    monkeypatch.setattr(app, "_fetch_multiple_stocks_compat", fake_fetch, raising=False)
+
+    context = app._build_analysis_request_context(
+        {
+            "symbols": ["NVDA"],
+            "finnhub_api_key": "",
+            "provider": "openai",
+            "api_key": "k",
+            "model": "m",
+        }
+    )
+    out = app._resolve_analysis_stocks(
+        context=context,
+        stocks=[
+            {
+                "symbol": "NVDA",
+                "ai_financial_context": {"annual": [], "quarterly": []},
+            }
+        ],
+        require_ai_context=True,
+    )
+
+    assert calls["count"] == 1
+    assert out[0]["symbol"] == "NVDA"
