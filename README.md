@@ -1,4 +1,4 @@
-﻿# 美股分析助手 (Stock Analysis Assistant)
+# 美股分析助手 (Stock Analysis Assistant)
 
 美股分析助手是一个基于 Flask 的 Web 应用，用于单股分析和多股对比分析。它聚合实时行情、财务数据、估值指标、新闻与外部搜索结果，并结合大模型输出财务分析与投资建议。
 
@@ -70,6 +70,20 @@ docker compose logs -f
 docker compose down
 ```
 
+### 3) VPS 一键部署
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maskgo68/StockAnalysisKit/main/scripts/vps-one-click-deploy.sh | sudo bash
+```
+
+默认会部署到 `/opt/stockanalysiskit`，端口 `16888`。
+
+可选自定义参数（仍然是一条命令）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maskgo68/StockAnalysisKit/main/scripts/vps-one-click-deploy.sh | sudo REPO_URL=https://github.com/maskgo68/StockAnalysisKit.git DEPLOY_BRANCH=main APP_DIR=/opt/stockanalysiskit STOCKCOMPARE_PORT=18080 bash
+```
+
 ## 服务管理命令
 
 ```bash
@@ -132,3 +146,4 @@ python -m pytest -q
 - 不要在代码中硬编码 API Key
 - 建议仅在本地可信环境保存配置
 - 本工具用于研究与信息整理，不构成投资建议
+
