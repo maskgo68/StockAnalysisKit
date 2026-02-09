@@ -3,7 +3,38 @@ services:
     build: .
     container_name: stockcompare
     restart: unless-stopped
+    init: true
     ports:
-      - "5000:5000"
+      - "${STOCKCOMPARE_PORT:-16888}:16888"
     environment:
       TZ: Asia/Shanghai
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      PYTHONIOENCODING: UTF-8
+      APP_PORT: 16888
+      STOCKCOMPARE_DB_PATH: /app/data/stockcompare.db
+      STOCKCOMPARE_FIN_CACHE_TTL_HOURS: 12
+      GUNICORN_WORKERS: 2
+      GUNICORN_THREADS: 4
+      GUNICORN_TIMEOUT: 120
+      AI_AUTO_CONTINUE_MAX_ROUNDS: 64
+      AI_CLAUDE_MAX_TOKENS: 64000
+      NEWS_ITEMS_PER_STOCK: ${NEWS_ITEMS_PER_STOCK:-10}
+      EXTERNAL_SEARCH_ITEMS_PER_STOCK: ${EXTERNAL_SEARCH_ITEMS_PER_STOCK:-10}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,urllib.request; p=os.getenv('APP_PORT','16888'); urllib.request.urlopen(f'http://127.0.0.1:{p}/', timeout=4)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

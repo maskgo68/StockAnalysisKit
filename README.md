@@ -1,148 +1,134 @@
-﻿# stockcompare-codex
+﻿# 美股分析助手 (Stock Analysis Assistant)
 
-一个面向美股对比分析的本地 Web 工具，支持多股票并排对比、AI 投资建议、Excel 导出和页面截屏下载。
+美股分析助手是一个基于 Flask 的 Web 应用，用于单股分析和多股对比分析。它聚合实时行情、财务数据、估值指标、新闻与外部搜索结果，并结合大模型输出财务分析与投资建议。
 
-## 项目总结
+本项目强调两件事：
+- 结构化数据先行：先把关键指标整理清楚，再做 AI 判断
+- 分析可追问：财务分析和投资建议都支持多轮追问
 
-本项目是一个 Flask + 原生前端实现的轻量应用，核心目标是把多只美股的关键信息放在同一页面做横向对比，并给出 AI 视角的综合建议。
+## 核心能力
 
-- 第 1/2 部分数据来自 Finnhub（行情、财务）
-- 第 3 部分数据来自 Yahoo Finance 页面解析（估值/预测）
-- 支持最多 10 只股票并发抓取（线程池，最大 8 并发）
-- 无数据库，实时请求、内存处理
-
-## 功能清单
-
-- 多股票管理：添加、删除、去重、限制最多 10 只
-- 一键刷新：拉取并展示三类数据
-- 三类对比表：
-  - 目前行情：股价、涨跌幅、总市值、成交额、PE TTM、5 日/20 日涨跌幅
-  - 历史财务：营收、利润（含 YoY）、EPS、毛利率、净利率
-  - 预测估值：Forward PE、PEG、预测 EPS（含 YoY）
-- AI 综合建议：
-  - 支持 `openai`（兼容接口）、`gemini`、`claude`
-  - Markdown 输出并前端安全渲染
-  - 自动续写（当模型因长度截断时最多继续 8 轮）
-- 配置测试：可测试 Finnhub 与 AI 配置可用性
-- 结果导出：
-  - Excel（`realtime` / `financial` / `forecast` / `meta` 四个 sheet）
-  - 页面截屏 PNG（客户端 `html2canvas`）
+- 单股分析与多股对比（最多 10 只）
+- 四大数据面板同页展示
+  - 实时行情
+  - 最新财务数据
+  - 预测
+  - 估值
+- 预期与财报兑现子模块
+  - 财报 beat/miss 与历史 EPS surprise
+  - EPS Trend（7/30/60/90 天）
+- AI 财务分析（支持本地规则版 + AI 增强版）
+- AI 投资建议（单股给建议、多股给排序与对比）
+- Exa / Tavily 外部搜索增强
+- 多轮追问（财务分析、投资建议各自独立上下文）
+- 自选组合管理（保存、加载、重命名、删除）
+- 财务缓存持久化（SQLite）
+- 导出 Excel、页面截图
 
 ## 技术架构
 
-- 后端：`Flask`（`app.py`）
-- 服务层：`stock_service.py`
-- 前端：`templates/index.html` + `static/app.js` + `static/styles.css`
-- 采集与解析：`requests` + `BeautifulSoup` + `lxml`
-- 导出：`pandas` + `openpyxl`
+- 后端：Flask
+- 数据抓取：requests + BeautifulSoup + yfinance
+- 存储：SQLite（watchlist + financial cache）
+- 前端：原生 HTML/CSS/JavaScript
+- 容器化：Docker + docker compose
+
+### 数据源策略
+
+- 实时行情：Finnhub 优先，缺失时回退 yfinance
+- 最新财务与预测字段：yfinance
+- 估值字段：Yahoo Finance quoteSummary / 页面解析
+- 新闻：Finnhub company-news，失败时回退 Yahoo RSS
+- 外部搜索：Exa / Tavily（可选）
+
+## 目录结构
+
+- `app.py`：Flask 入口、API 路由、服务启动/状态/停止
+- `stock_service.py`：数据抓取、清洗、分析、AI 调用
+- `persistence.py`：SQLite 持久化与财务缓存
+- `templates/index.html`：页面结构
+- `static/app.js`：前端状态与交互逻辑
+- `static/styles.css`：页面样式
+- `tests/`：pytest 测试用例
 
 ## 快速开始
 
-### 1) 安装依赖
+### 1) 本地运行
 
 ```bash
 pip install -r requirements.txt
-```
-
-### 2) 启动项目
-
-```bash
 python app.py
 ```
 
-打开：`http://127.0.0.1:5000`
+访问地址：`http://127.0.0.1:16888`
 
-说明：在 Windows 下直接运行 `python app.py` 时，程序默认会在新终端窗口启动服务。
-
-### 3) 页面使用流程
-
-1. 填写 `Finnhub API Key` 并测试配置
-2. 添加股票代码（如 `NVDA, AAPL, MSFT`）
-3. 点击“刷新数据”查看三类对比表
-4. 按需点击“生成 AI 综合建议”
-5. 导出 Excel 或截屏
-
-## Docker 部署（VPS 一键）
-
-### 方式 1：已在项目目录
+### 2) Docker 运行
 
 ```bash
 docker compose up -d --build
-```
-
-访问：`http://服务器IP:5000`
-
-### 方式 2：新 VPS 从 GitHub 一键拉起
-
-```bash
-git clone https://github.com/hidenmaskvip/stockcompare.git
-cd stockcompare
-docker compose up -d --build
-```
-
-常用运维命令：
-
-```bash
-docker compose ps
 docker compose logs -f
-docker compose pull
-docker compose up -d
 docker compose down
 ```
 
-## API 简要说明
+## 服务管理命令
 
-- `GET /api/compare?symbols=NVDA,AAPL`
-  - Header: `X-Finnhub-Api-Key`
-  - 返回股票对比数据
-- `POST /api/export-excel`
-  - Body: `symbols`, `finnhub_api_key`
-  - 返回 Excel 文件流
-- `POST /api/ai-analysis`
-  - Body: `symbols`, `stocks`(可选), `provider`, `api_key`, `model`, `base_url`(可选)
-  - 返回 AI Markdown 分析
-- `POST /api/test-config`
-  - `target=finnhub` 或 `target=ai`
-  - 返回配置可用性检测结果
-
-## 数据口径与降级策略
-
-- 金额字段统一为十亿美元（`B USD`），百分比统一 `%`，多数数值保留两位小数
-- 缺失值统一返回 `null`，前端显示为 `--`，不做臆造
-- Finnhub 某些套餐若无 K 线权限，会降级使用 Yahoo Chart 补齐：
-  - 5 日/20 日涨跌幅
-  - 成交额估算
-- 新闻优先 Finnhub，失败则回退 Yahoo RSS
-
-## 项目结构
-
-```text
-stockcompare-codex/
-├─ app.py                  # Flask 入口与接口编排
-├─ stock_service.py        # 数据抓取、清洗、AI 调用核心逻辑
-├─ requirements.txt
-├─ Dockerfile
-├─ docker-compose.yml
-├─ .dockerignore
-├─ templates/
-│  └─ index.html           # 页面骨架
-└─ static/
-   ├─ app.js               # 前端交互与渲染
-   └─ styles.css
+```bash
+python app.py --status   # 查看服务状态
+python app.py --stop     # 停止服务
+python app.py --serve    # 当前终端前台运行
+python app.py            # 默认启动（Windows 下可拉起新终端）
 ```
 
-## 依赖版本
+## 配置说明
 
-- Flask==3.1.0
-- gunicorn==23.0.0
-- pandas==2.2.3
-- requests==2.32.3
-- beautifulsoup4==4.12.3
-- lxml==5.3.0
-- openpyxl==3.1.5
+### 前端可配置项
 
-## 已知限制
+- Finnhub API Key
+- AI Provider：OpenAI 兼容 / Gemini / Claude
+- AI 模型名
+- AI API Key
+- OpenAI 兼容 Base URL
+- Exa API Key（可选）
+- Tavily API Key（可选）
 
-- 强依赖外部接口质量与限流策略，响应时间会随网络波动
-- Yahoo 页面结构如变更，预测估值抓取可能失效
-- AI 结论仅供研究参考，不构成投资建议
+### 常用环境变量
+
+- `STOCKCOMPARE_DB_PATH`：SQLite 文件路径
+- `STOCKCOMPARE_FIN_CACHE_TTL_HOURS`：财务缓存有效期（小时）
+- `NEWS_ITEMS_PER_STOCK`：每只股票新闻条数（1-20）
+- `EXTERNAL_SEARCH_ITEMS_PER_STOCK`：每只股票外部搜索条数（1-20）
+- `EXA_API_KEY` / `TAVILY_API_KEY`：外部搜索 Key（可选）
+- `AI_AUTO_CONTINUE_MAX_ROUNDS`：AI 自动续写轮数上限
+- `AI_CLAUDE_MAX_TOKENS`：Claude 单次 `max_tokens`
+
+## API 概览
+
+### 数据与分析
+
+- `GET /api/compare`
+- `POST /api/export-excel`
+- `POST /api/financial-analysis`
+- `POST /api/ai-analysis`
+- `POST /api/financial-analysis-followup`
+- `POST /api/ai-analysis-followup`
+- `POST /api/test-config`
+
+### 自选组合
+
+- `GET /api/watchlist`
+- `POST /api/watchlist`
+- `GET /api/watchlist/<id>`
+- `PATCH /api/watchlist/<id>`
+- `DELETE /api/watchlist/<id>`
+
+## 测试
+
+```bash
+python -m pytest -q
+```
+
+## 安全与使用建议
+
+- 不要在代码中硬编码 API Key
+- 建议仅在本地可信环境保存配置
+- 本工具用于研究与信息整理，不构成投资建议

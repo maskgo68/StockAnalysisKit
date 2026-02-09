@@ -3,18 +3,29 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>美股对比分析</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  <title>美股分析助手</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260208_9" />
 </head>
 <body>
+  <div id="status" aria-live="polite"></div>
   <main class="container" id="capture-target">
-    <h1>美股自动对比分析</h1>
-    <p class="hint">数据源：第1/2部分 Finnhub，第3部分 Yahoo Finance 页面爬虫；金额单位统一为十亿美元（B USD）。</p>
+    <header class="hero">
+      <h1>美股分析助手</h1>
+      <p class="hint">数据源：第1部分 Finnhub 优先（无 API Key 或数据缺失时回退 yfinance），第2/3部分 yfinance（最新财务、预测）；其后补充模块 yfinance（beat/miss 与 EPS Trend）；第4部分 Yahoo Finance 接口/页面解析（估值字段为主）。金额单位统一为十亿美元（B USD）。</p>
+      <div class="hero-tags">
+        <span>Realtime Market</span>
+        <span>Financial Cache</span>
+        <span>AI Research Notes</span>
+      </div>
+    </header>
 
     <section class="toolbar">
       <div class="symbol-row">
         <label for="new-symbol">添加股票代码</label>
-        <input id="new-symbol" placeholder="例如 AMAT" />
+        <input id="new-symbol" placeholder="例如 NVDA" />
         <button id="add-symbol-btn" type="button">添加股票</button>
       </div>
 
@@ -22,8 +33,27 @@
         <div id="symbol-chips" class="chips"></div>
       </div>
 
+      <details id="watchlist-panel" class="watchlist-panel">
+        <summary>
+          <span class="watchlist-summary-title">自选股组合</span>
+          <span id="watchlist-meta" class="watchlist-meta">暂无已保存自选组</span>
+        </summary>
+        <div class="watchlist-panel-body">
+          <div class="watchlist-row">
+            <input id="watchlist-name" placeholder="输入自选组名称（可选）" />
+            <button id="save-watchlist-btn" type="button">保存当前自选</button>
+            <button id="load-watchlist-btn" type="button">刷新自选列表</button>
+          </div>
+
+          <div id="watchlist-list" class="watchlist-list">
+            <div class="watchlist-empty">暂无已保存自选组</div>
+          </div>
+        </div>
+      </details>
+
       <div class="actions-row">
         <button id="refresh-btn" type="button">刷新数据</button>
+        <button id="financial-refresh-btn" type="button">强制刷新财务缓存</button>
         <button id="export-btn" type="button">导出Excel</button>
         <button id="screenshot-btn" type="button">截屏下载</button>
       </div>
@@ -32,66 +62,132 @@
     </section>
 
     <section>
-      <h2>1) 目前行情数据</h2>
+      <h2>1) 实时行情</h2>
       <div class="table-wrap"><table id="realtime-table"></table></div>
     </section>
 
     <section>
-      <h2>2) 历史财务数据</h2>
+      <h2>2) 最新财务数据</h2>
       <div class="table-wrap"><table id="financial-table"></table></div>
     </section>
 
     <section>
-      <h2>3) 预测与估值数据</h2>
+      <h2>3) 预测</h2>
+      <div class="table-wrap"><table id="prediction-table"></table></div>
+      <details class="insight-panel">
+        <summary>财报 beat/miss、历史 EPS surprise（点击展开）</summary>
+        <div id="beat-miss-output" class="md-preview">请先抓取数据，再查看历史超预期表现。</div>
+      </details>
+      <details class="insight-panel">
+        <summary>一致预期变化 EPS Trend（7/30/60/90天）（点击展开）</summary>
+        <div id="eps-trend-output" class="md-preview">请先抓取数据，再查看一致预期变化趋势。</div>
+      </details>
+    </section>
+
+    <section>
+      <h2>4) 估值</h2>
       <div class="table-wrap"><table id="forecast-table"></table></div>
     </section>
 
     <section>
-      <h2>AI 投资建议</h2>
+      <h2>5) 财务分析</h2>
       <div class="ai-actions">
-        <button id="ai-btn" type="button" disabled>生成 AI 综合建议</button>
-        <span id="status"></span>
+        <button id="earnings-btn" type="button" disabled>生成财务分析</button>
+        <button id="copy-earnings-btn" type="button">复制输出</button>
       </div>
-      <div id="ai-output" class="md-preview">请先抓取数据，再生成建议。</div>
+      <div id="earnings-output" class="md-preview">请先抓取数据，再生成财务分析。</div>
+      <div class="followup-panel">
+        <div class="followup-row">
+          <input id="earnings-followup-input" type="text" placeholder="继续追问财务分析，例如：AI业务收入占比是多少？" disabled />
+          <button id="earnings-followup-btn" type="button" disabled>发送追问</button>
+        </div>
+        <div id="earnings-followup-thread" class="followup-thread">
+          <div class="followup-empty">财务分析生成后可继续追问。</div>
+        </div>
+      </div>
     </section>
 
-    <section class="toolbar">
-      <h2>API 配置</h2>
-      <div class="config-grid">
-        <div class="field-row">
-          <label for="finnhub-api-key">Finnhub API Key</label>
-          <input id="finnhub-api-key" type="password" placeholder="粘贴 Finnhub Key" autocomplete="off" />
-        </div>
-        <button id="test-finnhub-btn" type="button">测试 Finnhub 配置</button>
-
-        <div class="field-row">
-          <label for="ai-provider">AI Provider</label>
-          <select id="ai-provider">
-            <option value="openai">OpenAI 兼容</option>
-            <option value="gemini">Gemini</option>
-            <option value="claude">Claude</option>
-          </select>
-        </div>
-        <div class="field-row">
-          <label for="ai-model">AI 模型</label>
-          <input id="ai-model" type="text" placeholder="例如 gpt-4.1-mini" autocomplete="off" />
-        </div>
-        <div class="field-row">
-          <label for="ai-base-url">OpenAI 兼容 Base URL</label>
-          <input id="ai-base-url" type="text" placeholder="默认 https://api.openai.com/v1" autocomplete="off" />
-        </div>
-        <div class="field-row">
-          <label for="ai-api-key">AI API Key</label>
-          <input id="ai-api-key" type="password" placeholder="粘贴 AI Key" autocomplete="off" />
-        </div>
-        <button id="test-ai-btn" type="button">测试 AI 配置</button>
+    <section>
+      <h2>6) 投资建议</h2>
+      <div class="ai-actions">
+        <button id="ai-btn" type="button" disabled>生成 AI 综合建议</button>
+        <button id="copy-ai-btn" type="button">复制输出</button>
       </div>
+      <div id="ai-output" class="md-preview">请先抓取数据，再生成建议。</div>
+      <div class="followup-panel">
+        <div class="followup-row">
+          <input id="ai-followup-input" type="text" placeholder="继续追问投资建议，例如：竞争对手 AMD 最新动态？" disabled />
+          <button id="ai-followup-btn" type="button" disabled>发送追问</button>
+        </div>
+        <div id="ai-followup-thread" class="followup-thread">
+          <div class="followup-empty">AI 建议生成后可继续追问。</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>7) 目标价</h2>
+      <div class="ai-actions">
+        <button id="target-price-btn" type="button" disabled>生成目标价分析</button>
+        <button id="copy-target-price-btn" type="button">复制输出</button>
+      </div>
+      <div id="target-price-output" class="md-preview">请先抓取数据，再生成目标价分析。</div>
+    </section>
+
+    <section class="toolbar api-toolbar">
+      <details id="api-config-panel">
+        <summary>
+          <span>API 配置与测试</span>
+          <span class="summary-hint">点击展开/收起</span>
+        </summary>
+        <div class="config-grid">
+          <div class="field-row">
+            <label for="finnhub-api-key">Finnhub API Key（可选）</label>
+            <input id="finnhub-api-key" type="password" placeholder="可选：用于第1部分实时行情优先数据源" autocomplete="off" />
+          </div>
+
+          <div class="field-row">
+            <label for="ai-provider">AI Provider</label>
+            <select id="ai-provider">
+              <option value="openai">OpenAI 兼容</option>
+              <option value="gemini">Gemini</option>
+              <option value="claude">Claude</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label for="ai-model">AI 模型</label>
+            <input id="ai-model" type="text" placeholder="例如 gpt-4.1-mini" autocomplete="off" />
+          </div>
+          <div class="field-row">
+            <label for="ai-base-url">OpenAI 兼容 Base URL</label>
+            <input id="ai-base-url" type="text" placeholder="默认 https://api.openai.com/v1" autocomplete="off" />
+          </div>
+          <div class="field-row">
+            <label for="ai-api-key">AI API Key</label>
+            <input id="ai-api-key" type="password" placeholder="粘贴 AI Key" autocomplete="off" />
+          </div>
+          <div class="field-row">
+            <label for="exa-api-key">Exa API Key（可选）</label>
+            <input id="exa-api-key" type="password" placeholder="可选：用于外部搜索增强" autocomplete="off" />
+          </div>
+          <div class="field-row">
+            <label for="tavily-api-key">Tavily API Key（可选）</label>
+            <input id="tavily-api-key" type="password" placeholder="可选：用于外部搜索增强" autocomplete="off" />
+          </div>
+          <div class="config-actions">
+            <button id="test-finnhub-btn" type="button">测试 Finnhub 配置</button>
+            <button id="test-ai-btn" type="button">测试 AI 配置</button>
+            <button id="test-exa-btn" type="button">测试 Exa 配置</button>
+            <button id="test-tavily-btn" type="button">测试 Tavily 配置</button>
+          </div>
+        </div>
+      </details>
     </section>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20260209_19"></script>
 </body>
 </html>
