@@ -33,12 +33,10 @@ def test_vps_deploy_script_uses_prebuilt_image_deploy_flow():
     assert "git clone" not in content
 
 
-def test_readme_mentions_one_command_vps_deploy():
+def test_readme_does_not_show_optional_vps_script_section():
     readme = _read("README.md")
-    assert "VPS 一键部署" in readme
-    assert "curl -fsSL" in readme
-    assert "scripts/vps-one-click-deploy.sh" in readme
-    assert "不会在 VPS 本地构建镜像" in readme
+    assert "VPS 一键部署脚本（可选）" not in readme
+    assert "scripts/vps-one-click-deploy.sh" not in readme
 
 
 def test_readme_mentions_minimal_one_line_docker_run():

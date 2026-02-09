@@ -76,22 +76,6 @@ docker compose logs -f
 docker compose down
 ```
 
-### 4) VPS 一键部署脚本（可选）
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/maskgo68/StockAnalysisKit/main/scripts/vps-one-click-deploy.sh | sudo bash
-```
-
-该脚本会直接从 DockerHub 拉取 `supergo6/stockanalysiskit:latest` 并启动服务，不会在 VPS 本地构建镜像。
-
-默认会部署到 `/opt/stockanalysiskit`，端口 `16888`。
-
-可选自定义参数（仍然是一条命令）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/maskgo68/StockAnalysisKit/main/scripts/vps-one-click-deploy.sh | sudo STOCKCOMPARE_IMAGE=supergo6/stockanalysiskit:latest APP_DIR=/opt/stockanalysiskit STOCKCOMPARE_PORT=18080 bash
-```
-
 ## 服务管理命令
 
 ```bash
