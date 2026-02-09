@@ -39,3 +39,10 @@ def test_readme_mentions_one_command_vps_deploy():
     assert "curl -fsSL" in readme
     assert "scripts/vps-one-click-deploy.sh" in readme
     assert "不会在 VPS 本地构建镜像" in readme
+
+
+def test_readme_mentions_minimal_one_line_docker_run():
+    readme = _read("README.md")
+    assert "docker run -d --name stockanalysiskit" in readme
+    assert "-p 16888:16888" in readme
+    assert "-v ./data:/app/data" in readme

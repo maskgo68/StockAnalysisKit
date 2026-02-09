@@ -62,7 +62,13 @@ python app.py
 
 访问地址：`http://127.0.0.1:16888`
 
-### 2) Docker 运行
+### 2) Docker 一行启动（推荐）
+
+```bash
+docker run -d --name stockanalysiskit --restart unless-stopped -p 16888:16888 -v ./data:/app/data -v ./logs:/app/logs supergo6/stockanalysiskit:latest
+```
+
+### 3) Docker Compose 运行（可选）
 
 ```bash
 docker compose up -d --build
@@ -70,7 +76,7 @@ docker compose logs -f
 docker compose down
 ```
 
-### 3) VPS 一键部署
+### 4) VPS 一键部署脚本（可选）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/maskgo68/StockAnalysisKit/main/scripts/vps-one-click-deploy.sh | sudo bash
