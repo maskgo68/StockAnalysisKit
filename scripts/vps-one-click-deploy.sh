@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/maskgo68/StockAnalysisKit.git}"
-DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 APP_DIR="${APP_DIR:-/opt/stockanalysiskit}"
 STOCKCOMPARE_PORT="${STOCKCOMPARE_PORT:-16888}"
+STOCKCOMPARE_IMAGE="${STOCKCOMPARE_IMAGE:-supergo6/stockanalysiskit:latest}"
+COMPOSE_URL="${COMPOSE_URL:-https://raw.githubusercontent.com/maskgo68/StockAnalysisKit/main/docker-compose.image.yml}"
+COMPOSE_FILE_NAME="docker-compose.image.yml"
+COMPOSE_FILE_PATH="${APP_DIR}/${COMPOSE_FILE_NAME}"
+ENV_FILE_PATH="${APP_DIR}/.env"
 
 log() {
   printf '[deploy] %s\n' "$1"
@@ -45,7 +48,6 @@ install_pkg_if_missing() {
 
 ensure_base_dependencies() {
   install_pkg_if_missing curl
-  install_pkg_if_missing git
 }
 
 install_or_enable_docker() {
@@ -76,54 +78,72 @@ compose_cmd() {
   exit 1
 }
 
-sync_repo() {
-  local parent_dir
-  parent_dir="$(dirname "$APP_DIR")"
-  mkdir -p "$parent_dir"
+download_compose_file() {
+  mkdir -p "$APP_DIR"
+  log "Downloading deploy compose file"
+  curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_FILE_PATH"
+}
 
-  if [ -d "$APP_DIR/.git" ]; then
-    log "Updating existing repository: $APP_DIR"
-    git -C "$APP_DIR" fetch --prune origin
-    git -C "$APP_DIR" checkout "$DEPLOY_BRANCH"
-    git -C "$APP_DIR" pull --ff-only origin "$DEPLOY_BRANCH"
-  elif [ -d "$APP_DIR" ]; then
-    echo "APP_DIR exists but is not a git repository: $APP_DIR" >&2
-    exit 1
+set_env_value() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+  local escaped_value=""
+
+  escaped_value="$(printf '%s' "$value" | sed 's/[&|]/\\&/g')"
+
+  if grep -q "^${key}=" "$env_file" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$env_file"
   else
-    log "Cloning repository into $APP_DIR"
-    git clone --depth 1 --branch "$DEPLOY_BRANCH" "$REPO_URL" "$APP_DIR"
+    printf '%s=%s\n' "$key" "$value" >> "$env_file"
   fi
 }
 
-prepare_env_file() {
-  local env_file="$APP_DIR/.env"
-  local existing_port=""
+prepare_runtime_env() {
   mkdir -p "$APP_DIR/data" "$APP_DIR/logs"
 
-  if [ ! -f "$env_file" ]; then
+  if [ ! -f "$ENV_FILE_PATH" ]; then
     log "Creating default .env"
-    cat > "$env_file" <<EOF
+    cat > "$ENV_FILE_PATH" <<EOF
+# Runtime image source
+STOCKCOMPARE_IMAGE=${STOCKCOMPARE_IMAGE}
+
+# HTTP expose port
 STOCKCOMPARE_PORT=${STOCKCOMPARE_PORT}
+
+# Optional external search limits
 NEWS_ITEMS_PER_STOCK=10
 EXTERNAL_SEARCH_ITEMS_PER_STOCK=10
+
+# Optional keys
 # EXA_API_KEY=
 # TAVILY_API_KEY=
 EOF
-  else
-    log "Using existing .env"
-    existing_port="$(grep -E '^STOCKCOMPARE_PORT=' "$env_file" 2>/dev/null | tail -n1 | cut -d'=' -f2 | tr -d '[:space:]')"
-    if [ -n "$existing_port" ]; then
-      STOCKCOMPARE_PORT="$existing_port"
-    fi
+  fi
+
+  set_env_value "$ENV_FILE_PATH" "STOCKCOMPARE_IMAGE" "$STOCKCOMPARE_IMAGE"
+  set_env_value "$ENV_FILE_PATH" "STOCKCOMPARE_PORT" "$STOCKCOMPARE_PORT"
+
+  if ! grep -q '^NEWS_ITEMS_PER_STOCK=' "$ENV_FILE_PATH"; then
+    printf '%s\n' 'NEWS_ITEMS_PER_STOCK=10' >> "$ENV_FILE_PATH"
+  fi
+
+  if ! grep -q '^EXTERNAL_SEARCH_ITEMS_PER_STOCK=' "$ENV_FILE_PATH"; then
+    printf '%s\n' 'EXTERNAL_SEARCH_ITEMS_PER_STOCK=10' >> "$ENV_FILE_PATH"
   fi
 }
 
 deploy_compose() {
   local compose
   compose="$(compose_cmd)"
-  log "Starting containers with: $compose up -d --build"
+
+  log "Pulling image from DockerHub"
   # shellcheck disable=SC2086
-  $compose -f "$APP_DIR/docker-compose.yml" up -d --build
+  $compose --env-file "$ENV_FILE_PATH" -f "$COMPOSE_FILE_PATH" pull
+
+  log "Starting containers with: $compose up -d --remove-orphans"
+  # shellcheck disable=SC2086
+  $compose --env-file "$ENV_FILE_PATH" -f "$COMPOSE_FILE_PATH" up -d --remove-orphans
 }
 
 health_check() {
@@ -138,15 +158,15 @@ health_check() {
     sleep 2
   done
 
-  echo "Health check failed. Inspect logs with: docker compose -f $APP_DIR/docker-compose.yml logs --tail=200" >&2
+  echo "Health check failed. Inspect logs with: docker compose --env-file $ENV_FILE_PATH -f $COMPOSE_FILE_PATH logs --tail=200" >&2
   exit 1
 }
 
 main() {
   ensure_base_dependencies
   install_or_enable_docker
-  sync_repo
-  prepare_env_file
+  download_compose_file
+  prepare_runtime_env
   deploy_compose
   health_check
 

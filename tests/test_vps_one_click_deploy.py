@@ -20,14 +20,17 @@ def test_vps_deploy_script_installs_or_checks_docker_then_runs_compose_up():
     content = _read("scripts/vps-one-click-deploy.sh")
     assert "get.docker.com" in content
     assert "docker compose" in content
-    assert "up -d --build" in content
+    assert "pull" in content
+    assert "up -d --remove-orphans" in content
+    assert "--build" not in content
 
 
-def test_vps_deploy_script_clones_or_updates_repo():
+def test_vps_deploy_script_uses_prebuilt_image_deploy_flow():
     content = _read("scripts/vps-one-click-deploy.sh")
-    assert "git clone" in content
-    assert "pull --ff-only" in content
-    assert "REPO_URL" in content
+    assert "STOCKCOMPARE_IMAGE" in content
+    assert "supergo6/stockanalysiskit:latest" in content
+    assert "docker-compose.image.yml" in content
+    assert "git clone" not in content
 
 
 def test_readme_mentions_one_command_vps_deploy():
@@ -35,3 +38,4 @@ def test_readme_mentions_one_command_vps_deploy():
     assert "VPS 一键部署" in readme
     assert "curl -fsSL" in readme
     assert "scripts/vps-one-click-deploy.sh" in readme
+    assert "不会在 VPS 本地构建镜像" in readme

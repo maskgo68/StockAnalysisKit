@@ -40,3 +40,9 @@ def test_compose_enforces_utf8_runtime_locale():
     assert "LANG: C.UTF-8" in compose
     assert "LC_ALL: C.UTF-8" in compose
     assert "PYTHONIOENCODING: UTF-8" in compose
+
+
+def test_deploy_compose_uses_prebuilt_dockerhub_image():
+    compose = _read("docker-compose.image.yml")
+    assert "image: ${STOCKCOMPARE_IMAGE:-supergo6/stockanalysiskit:latest}" in compose
+    assert "build:" not in compose
