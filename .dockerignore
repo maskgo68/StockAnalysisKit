@@ -13,7 +13,7 @@ README.assets/
 data/
 logs/
 tests/
-.stockcompare-server.pid
+.stockanalysiskit-server.pid
 run.out.log
 run.err.log
 AGENTS.md

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/stockanalysiskit}"
-STOCKCOMPARE_PORT="${STOCKCOMPARE_PORT:-16888}"
-STOCKCOMPARE_IMAGE="${STOCKCOMPARE_IMAGE:-supergo6/stockanalysiskit:latest}"
+STOCKANALYSISKIT_PORT="${STOCKANALYSISKIT_PORT:-16888}"
+STOCKANALYSISKIT_IMAGE="${STOCKANALYSISKIT_IMAGE:-supergo6/stockanalysiskit:latest}"
 COMPOSE_URL="${COMPOSE_URL:-https://raw.githubusercontent.com/maskgo68/StockAnalysisKit/main/docker-compose.image.yml}"
 COMPOSE_FILE_NAME="docker-compose.image.yml"
 COMPOSE_FILE_PATH="${APP_DIR}/${COMPOSE_FILE_NAME}"
@@ -106,10 +106,10 @@ prepare_runtime_env() {
     log "Creating default .env"
     cat > "$ENV_FILE_PATH" <<EOF
 # Runtime image source
-STOCKCOMPARE_IMAGE=${STOCKCOMPARE_IMAGE}
+STOCKANALYSISKIT_IMAGE=${STOCKANALYSISKIT_IMAGE}
 
 # HTTP expose port
-STOCKCOMPARE_PORT=${STOCKCOMPARE_PORT}
+STOCKANALYSISKIT_PORT=${STOCKANALYSISKIT_PORT}
 
 # Optional external search limits
 NEWS_ITEMS_PER_STOCK=10
@@ -121,8 +121,8 @@ EXTERNAL_SEARCH_ITEMS_PER_STOCK=10
 EOF
   fi
 
-  set_env_value "$ENV_FILE_PATH" "STOCKCOMPARE_IMAGE" "$STOCKCOMPARE_IMAGE"
-  set_env_value "$ENV_FILE_PATH" "STOCKCOMPARE_PORT" "$STOCKCOMPARE_PORT"
+  set_env_value "$ENV_FILE_PATH" "STOCKANALYSISKIT_IMAGE" "$STOCKANALYSISKIT_IMAGE"
+  set_env_value "$ENV_FILE_PATH" "STOCKANALYSISKIT_PORT" "$STOCKANALYSISKIT_PORT"
 
   if ! grep -q '^NEWS_ITEMS_PER_STOCK=' "$ENV_FILE_PATH"; then
     printf '%s\n' 'NEWS_ITEMS_PER_STOCK=10' >> "$ENV_FILE_PATH"
@@ -148,7 +148,7 @@ deploy_compose() {
 
 health_check() {
   local i
-  local url="http://127.0.0.1:${STOCKCOMPARE_PORT}/"
+  local url="http://127.0.0.1:${STOCKANALYSISKIT_PORT}/"
 
   for i in $(seq 1 30); do
     if curl -fsS "$url" >/dev/null 2>&1; then
@@ -171,7 +171,7 @@ main() {
   health_check
 
   log "Done."
-  log "URL: http://<your-vps-ip>:${STOCKCOMPARE_PORT}"
+  log "URL: http://<your-vps-ip>:${STOCKANALYSISKIT_PORT}"
 }
 
 main "$@"

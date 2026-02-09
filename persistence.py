@@ -18,10 +18,10 @@ def _utc_now_iso():
 def _resolve_db_path(db_path=None):
     if db_path:
         return Path(db_path)
-    env_path = str(os.getenv("STOCKCOMPARE_DB_PATH", "")).strip()
+    env_path = str(os.getenv("STOCKANALYSISKIT_DB_PATH", "")).strip()
     if env_path:
         return Path(env_path)
-    return Path(__file__).resolve().parent / "data" / "stockcompare.db"
+    return Path(__file__).resolve().parent / "data" / "stockanalysiskit.db"
 
 
 def _connect(db_path=None):

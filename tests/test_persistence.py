@@ -5,7 +5,7 @@ import persistence
 
 
 def test_watchlist_entries_crud(tmp_path):
-    db_path = tmp_path / "stockcompare.db"
+    db_path = tmp_path / "stockanalysiskit.db"
     persistence.init_storage(db_path=str(db_path))
 
     first_id = persistence.create_watchlist_entry(
@@ -31,7 +31,7 @@ def test_watchlist_entries_crud(tmp_path):
 
 
 def test_update_watchlist_name(tmp_path):
-    db_path = tmp_path / "stockcompare.db"
+    db_path = tmp_path / "stockanalysiskit.db"
     persistence.init_storage(db_path=str(db_path))
     watchlist_id = persistence.create_watchlist_entry(
         name="原名称",
@@ -56,7 +56,7 @@ def test_update_watchlist_name(tmp_path):
 
 
 def test_legacy_watchlist_migrates_only_once(tmp_path):
-    db_path = tmp_path / "stockcompare.db"
+    db_path = tmp_path / "stockanalysiskit.db"
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         "CREATE TABLE watchlist (id INTEGER PRIMARY KEY CHECK (id = 1), symbols_json TEXT NOT NULL, updated_at TEXT NOT NULL)"
@@ -77,7 +77,7 @@ def test_legacy_watchlist_migrates_only_once(tmp_path):
 
 
 def test_financial_cache_ttl(tmp_path):
-    db_path = tmp_path / "stockcompare.db"
+    db_path = tmp_path / "stockanalysiskit.db"
     persistence.init_storage(db_path=str(db_path))
 
     persistence.set_cached_financial_bundle(
@@ -95,7 +95,7 @@ def test_financial_cache_ttl(tmp_path):
 
 
 def test_ai_history_table_removed_on_init_storage(tmp_path):
-    db_path = tmp_path / "stockcompare.db"
+    db_path = tmp_path / "stockanalysiskit.db"
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         """
@@ -135,7 +135,7 @@ def test_ai_history_table_removed_on_init_storage(tmp_path):
 
 
 def test_init_storage_skips_repeated_initialization_for_same_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "stockcompare.db"
+    db_path = tmp_path / "stockanalysiskit.db"
     real_connect = persistence._connect
     calls = {"count": 0}
 

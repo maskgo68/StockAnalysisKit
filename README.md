@@ -99,8 +99,8 @@ python app.py            # 默认启动（Windows 下可拉起新终端）
 
 ### 常用环境变量
 
-- `STOCKCOMPARE_DB_PATH`：SQLite 文件路径
-- `STOCKCOMPARE_FIN_CACHE_TTL_HOURS`：财务缓存有效期（小时）
+- `STOCKANALYSISKIT_DB_PATH`：SQLite 文件路径
+- `STOCKANALYSISKIT_FIN_CACHE_TTL_HOURS`：财务缓存有效期（小时）
 - `NEWS_ITEMS_PER_STOCK`：每只股票新闻条数（1-20）
 - `EXTERNAL_SEARCH_ITEMS_PER_STOCK`：每只股票外部搜索条数（1-20）
 - `EXA_API_KEY` / `TAVILY_API_KEY`：外部搜索 Key（可选）

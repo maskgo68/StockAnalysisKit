@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   symbols: [],
   stocks: [],
   watchlist: {
@@ -21,13 +21,13 @@
 };
 
 const storageKeys = {
-  finnhubApiKey: "stockcompare.finnhub_api_key",
-  aiProvider: "stockcompare.ai_provider",
-  aiModel: "stockcompare.ai_model",
-  aiApiKey: "stockcompare.ai_api_key",
-  aiBaseUrl: "stockcompare.ai_base_url",
-  exaApiKey: "stockcompare.exa_api_key",
-  tavilyApiKey: "stockcompare.tavily_api_key"
+  finnhubApiKey: "stockanalysiskit.finnhub_api_key",
+  aiProvider: "stockanalysiskit.ai_provider",
+  aiModel: "stockanalysiskit.ai_model",
+  aiApiKey: "stockanalysiskit.ai_api_key",
+  aiBaseUrl: "stockanalysiskit.ai_base_url",
+  exaApiKey: "stockanalysiskit.exa_api_key",
+  tavilyApiKey: "stockanalysiskit.tavily_api_key"
 };
 
 const defaultModels = {
@@ -1033,7 +1033,7 @@ async function exportExcel() {
   const blob = await resp.blob();
   const cd = resp.headers.get("content-disposition") || "";
   const match = /filename=([^;]+)/i.exec(cd);
-  const filename = match ? decodeURIComponent(match[1].replaceAll('"', "")) : "stock_compare.xlsx";
+  const filename = match ? decodeURIComponent(match[1].replaceAll('"', "")) : "stockanalysiskit.xlsx";
 
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1151,7 +1151,7 @@ async function captureScreen() {
   const symbols = state.symbols.length ? state.symbols.join("_") : "stocks";
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   a.href = canvas.toDataURL("image/png");
-  a.download = `stock_compare_${symbols}_${ts}.png`;
+  a.download = `stockanalysiskit_${symbols}_${ts}.png`;
   a.click();
   status.textContent = "截屏已下载。";
 }

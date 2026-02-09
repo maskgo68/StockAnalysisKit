@@ -44,5 +44,5 @@ def test_compose_enforces_utf8_runtime_locale():
 
 def test_deploy_compose_uses_prebuilt_dockerhub_image():
     compose = _read("docker-compose.image.yml")
-    assert "image: ${STOCKCOMPARE_IMAGE:-supergo6/stockanalysiskit:latest}" in compose
+    assert "image: ${STOCKANALYSISKIT_IMAGE:-supergo6/stockanalysiskit:latest}" in compose
     assert "build:" not in compose

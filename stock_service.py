@@ -1,4 +1,4 @@
-﻿import json
+import json
 import math
 import os
 import re
@@ -2406,7 +2406,7 @@ def _get_recent_news(symbol, api_key, limit=NEWS_ITEMS_PER_STOCK):
 
 
 def _financial_cache_ttl_hours():
-    raw = str(os.getenv("STOCKCOMPARE_FIN_CACHE_TTL_HOURS", "12")).strip()
+    raw = str(os.getenv("STOCKANALYSISKIT_FIN_CACHE_TTL_HOURS", "12")).strip()
     try:
         ttl = float(raw)
         return ttl if ttl > 0 else 12.0

@@ -1,19 +1,19 @@
 services:
-  stockcompare:
+  stockanalysiskit:
     build: .
-    container_name: stockcompare
+    container_name: stockanalysiskit
     restart: unless-stopped
     init: true
     ports:
-      - "${STOCKCOMPARE_PORT:-16888}:16888"
+      - "${STOCKANALYSISKIT_PORT:-16888}:16888"
     environment:
       TZ: Asia/Shanghai
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
       PYTHONIOENCODING: UTF-8
       APP_PORT: 16888
-      STOCKCOMPARE_DB_PATH: /app/data/stockcompare.db
-      STOCKCOMPARE_FIN_CACHE_TTL_HOURS: 12
+      STOCKANALYSISKIT_DB_PATH: /app/data/stockanalysiskit.db
+      STOCKANALYSISKIT_FIN_CACHE_TTL_HOURS: 12
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
       GUNICORN_TIMEOUT: 120

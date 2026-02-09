@@ -27,7 +27,7 @@ def test_vps_deploy_script_installs_or_checks_docker_then_runs_compose_up():
 
 def test_vps_deploy_script_uses_prebuilt_image_deploy_flow():
     content = _read("scripts/vps-one-click-deploy.sh")
-    assert "STOCKCOMPARE_IMAGE" in content
+    assert "STOCKANALYSISKIT_IMAGE" in content
     assert "supergo6/stockanalysiskit:latest" in content
     assert "docker-compose.image.yml" in content
     assert "git clone" not in content

@@ -1,4 +1,4 @@
-﻿from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import argparse
 from io import BytesIO
@@ -33,7 +33,7 @@ from stock_service import (
     test_tavily_api_key,
 )
 
-PID_FILE = Path(__file__).resolve().parent / ".stockcompare-server.pid"
+PID_FILE = Path(__file__).resolve().parent / ".stockanalysiskit-server.pid"
 APP_PORT = 16888
 
 app = Flask(__name__)
@@ -286,7 +286,7 @@ def export_excel():
         force_refresh_financial=_is_truthy(payload.get("force_financial_refresh")),
     )
     stream = _build_excel_file(stocks, symbols)
-    filename = f"stock_compare_{'_'.join(symbols)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"stockanalysiskit_{'_'.join(symbols)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return send_file(
         stream,
         as_attachment=True,
