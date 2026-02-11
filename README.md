@@ -1,3 +1,5 @@
+[English](readme-en.md) | 中文
+
 # StockAnalysisKit
 
 美股/全球股票分析工具，支持单股分析与多股对比，聚合行情数据、财务快照、估值/预测指标，并调用 AI 生成分析报告。
