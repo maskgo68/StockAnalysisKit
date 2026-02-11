@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import re
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
@@ -48,6 +49,191 @@ AI_AUTO_CONTINUE_MAX_ROUNDS = max(1, _env_int("AI_AUTO_CONTINUE_MAX_ROUNDS", 64)
 AI_CLAUDE_MAX_TOKENS = max(1024, _env_int("AI_CLAUDE_MAX_TOKENS", 64000))
 NEWS_ITEMS_PER_STOCK = max(1, min(_env_int("NEWS_ITEMS_PER_STOCK", 10), 20))
 EXTERNAL_SEARCH_ITEMS_PER_STOCK = max(1, min(_env_int("EXTERNAL_SEARCH_ITEMS_PER_STOCK", 10), 20))
+_FETCH_ISSUES = ContextVar("stock_fetch_issues", default=None)
+
+
+def _issue_status_code(exc):
+    if exc is None:
+        return None
+    try:
+        response = getattr(exc, "response", None)
+        code = getattr(response, "status_code", None)
+        if code is None:
+            return None
+        return int(code)
+    except Exception:
+        return None
+
+
+def _issue_message(exc=None, message=None):
+    if message is not None and str(message).strip():
+        return str(message).strip()
+    if exc is None:
+        return "unknown error"
+
+    text = str(exc or "").strip() or type(exc).__name__
+    status_code = _issue_status_code(exc)
+    if status_code is not None:
+        return f"HTTP {status_code} - {text}"
+    return f"{type(exc).__name__}: {text}"
+
+
+def _record_fetch_issue(source, exc=None, message=None):
+    source_text = str(source or "unknown").strip() or "unknown"
+    entry = {
+        "source": source_text,
+        "message": _issue_message(exc=exc, message=message),
+    }
+    status_code = _issue_status_code(exc)
+    if status_code is not None:
+        entry["status_code"] = status_code
+
+    issues = _FETCH_ISSUES.get()
+    if isinstance(issues, list):
+        issues.append(entry)
+
+    if exc is None:
+        LOGGER.warning("Stock fetch issue source=%s message=%s", source_text, entry["message"])
+    else:
+        LOGGER.warning("Stock fetch issue source=%s message=%s", source_text, entry["message"], exc_info=True)
+    return entry
+
+
+def _start_issue_collection():
+    return _FETCH_ISSUES.set([])
+
+
+def _finish_issue_collection(token):
+    items = _FETCH_ISSUES.get()
+    _FETCH_ISSUES.reset(token)
+    if not isinstance(items, list):
+        return []
+
+    out = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or "").strip()
+        message = str(item.get("message") or "").strip()
+        status_code = item.get("status_code")
+        key = (source, message, status_code)
+        if key in seen:
+            continue
+        seen.add(key)
+        row = {"source": source or "unknown", "message": message or "unknown error"}
+        if status_code is not None:
+            row["status_code"] = status_code
+        out.append(row)
+    return out
+
+
+class ServiceError(Exception):
+    def __init__(self, code, message, status_code=400):
+        self.code = str(code or "SERVICE_ERROR")
+        self.message = str(message or "service error")
+        self.status_code = int(status_code)
+        super().__init__(self.message)
+
+
+def _normalize_ui_language(language):
+    raw = str(language or "").strip().lower()
+    if raw.startswith("en"):
+        return "en"
+    if raw.startswith("zh"):
+        return "zh"
+    return "zh"
+
+
+def _is_english(language):
+    return _normalize_ui_language(language) == "en"
+
+
+def _localized_text(language, zh_text, en_text):
+    return str(en_text) if _is_english(language) else str(zh_text)
+
+
+def _service_error(code, language, zh_text, en_text, status_code=400):
+    return ServiceError(
+        code=code,
+        message=_localized_text(language, zh_text, en_text),
+        status_code=status_code,
+    )
+
+
+def _runtime_ai_error_to_service_error(err, language):
+    text = str(err or "").strip()
+    lowered = text.lower()
+    if "unsupported ai provider" in lowered or "不支持的 ai provider" in text:
+        return ServiceError(code="AI_PROVIDER_UNSUPPORTED", message=text, status_code=400)
+    if "missing stock context" in lowered or "缺少可分析的股票上下文" in text:
+        return ServiceError(code="STOCK_CONTEXT_MISSING", message=text, status_code=400)
+    return ServiceError(code="AI_CALL_FAILED", message=text, status_code=502)
+
+# Yahoo ticker suffix to quote currency fallback map.
+SYMBOL_SUFFIX_CURRENCY_MAP = {
+    "HK": "HKD",
+    "SS": "CNY",
+    "SZ": "CNY",
+    "SH": "CNY",
+    "BJ": "CNY",
+    "T": "JPY",
+    "KS": "KRW",
+    "KQ": "KRW",
+    "TW": "TWD",
+    "TWO": "TWD",
+    "L": "GBP",
+    "PA": "EUR",
+    "AS": "EUR",
+    "BR": "EUR",
+    "MI": "EUR",
+    "DE": "EUR",
+    "MC": "EUR",
+    "HE": "EUR",
+    "CO": "DKK",
+    "ST": "SEK",
+    "OL": "NOK",
+    "SW": "CHF",
+    "AX": "AUD",
+    "TO": "CAD",
+    "V": "CAD",
+    "SI": "SGD",
+    "NS": "INR",
+    "BO": "INR",
+    "BK": "THB",
+    "JK": "IDR",
+    "KL": "MYR",
+    "VN": "VND",
+    "SA": "BRL",
+    "MX": "MXN",
+    "JO": "ZAR",
+    "TA": "ILS",
+    "ME": "RUB",
+    "BA": "ARS",
+}
+
+
+def _normalize_currency_code(value):
+    text = re.sub(r"[^A-Z]", "", str(value or "").strip().upper())
+    if len(text) != 3:
+        return None
+    return text
+
+
+def _infer_currency_from_symbol(symbol):
+    raw = str(symbol or "").strip().upper()
+    if not raw:
+        return None
+    if "." in raw:
+        base, suffix = raw.rsplit(".", 1)
+        mapped = SYMBOL_SUFFIX_CURRENCY_MAP.get(suffix)
+        if mapped:
+            return mapped
+        # US tickers can contain a dot for class shares like BF.B.
+        if len(suffix) == 1 and base.isalpha():
+            return "USD"
+        return None
+    return "USD"
 
 def _compact_text(value, max_len=SEARCH_SNIPPET_MAX_LEN):
     text = " ".join(str(value or "").split())
@@ -392,6 +578,7 @@ def _safe_finnhub_get(path, params, api_key):
     try:
         return _finnhub_get(path, params, api_key), None
     except Exception as exc:
+        _record_fetch_issue(f"finnhub{path}", exc=exc)
         return {}, str(exc)
 
 
@@ -422,8 +609,8 @@ def _yahoo_quote_summary(symbol, modules):
         result = (data.get("quoteSummary") or {}).get("result") or []
         if result and isinstance(result[0], dict):
             return result[0]
-    except Exception:
-        pass
+    except Exception as exc:
+        _record_fetch_issue("yahoo.quote_summary", exc=exc)
     return {}
 
 
@@ -440,7 +627,8 @@ def _yahoo_chart_prices(symbol, range_str="3mo", interval="1d"):
         closes = [float(x) for x in (q.get("close") or []) if _is_number(x)]
         volumes = [float(x) for x in (q.get("volume") or []) if _is_number(x)]
         return closes, volumes
-    except Exception:
+    except Exception as exc:
+        _record_fetch_issue("yahoo.chart", exc=exc)
         return [], []
 
 
@@ -483,6 +671,9 @@ def _parse_yahoo_single_page(url):
     resp = requests.get(url, headers=HEADERS, timeout=20)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
+    analysis_eps_trend = None
+    if "/analysis/" in str(url or "").lower():
+        analysis_eps_trend = _extract_eps_trend_current_estimate_from_soup(soup)
 
     display_metrics = {}
     for li in soup.find_all("li"):
@@ -516,7 +707,11 @@ def _parse_yahoo_single_page(url):
         except Exception:
             continue
 
-    return {"display_metrics": display_metrics, "quote_summary": quote_summary}
+    return {
+        "display_metrics": display_metrics,
+        "quote_summary": quote_summary,
+        "analysis_eps_trend": analysis_eps_trend,
+    }
 
 
 def _parse_yahoo_pages(symbol):
@@ -527,6 +722,11 @@ def _parse_yahoo_pages(symbol):
     ]
     merged_metrics = {}
     merged_summary = {}
+    merged_analysis_eps_trend = {
+        "current_year_eps": None,
+        "next_qtr_eps": None,
+        "next_year_eps": None,
+    }
     for url in urls:
         try:
             res = _parse_yahoo_single_page(url)
@@ -535,17 +735,26 @@ def _parse_yahoo_pages(symbol):
                     merged_metrics[k] = v
             if isinstance(res.get("quote_summary"), dict):
                 merged_summary.update(res.get("quote_summary"))
-        except Exception:
+            analysis_eps_trend = (
+                res.get("analysis_eps_trend") if isinstance(res.get("analysis_eps_trend"), dict) else {}
+            )
+            for key in ("current_year_eps", "next_qtr_eps", "next_year_eps"):
+                if _is_number(merged_analysis_eps_trend.get(key)):
+                    continue
+                value = analysis_eps_trend.get(key)
+                if _is_number(value):
+                    merged_analysis_eps_trend[key] = float(value)
+        except Exception as exc:
+            _record_fetch_issue(f"yahoo.page:{url}", exc=exc)
             continue
-    return {"display_metrics": merged_metrics, "quote_summary": merged_summary}
+    return {
+        "display_metrics": merged_metrics,
+        "quote_summary": merged_summary,
+        "analysis_eps_trend": merged_analysis_eps_trend,
+    }
 
 
-def _extract_eps_trend_current_estimate(symbol):
-    url = f"https://finance.yahoo.com/quote/{symbol}/analysis/"
-    resp = requests.get(url, headers=HEADERS, timeout=20)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-
+def _extract_eps_trend_current_estimate_from_soup(soup):
     for table in soup.find_all("table"):
         rows = table.find_all("tr")
         if len(rows) < 2:
@@ -592,6 +801,14 @@ def _extract_eps_trend_current_estimate(symbol):
             }
 
     return {"current_year_eps": None, "next_qtr_eps": None, "next_year_eps": None}
+
+
+def _extract_eps_trend_current_estimate(symbol):
+    url = f"https://finance.yahoo.com/quote/{symbol}/analysis/"
+    resp = requests.get(url, headers=HEADERS, timeout=20)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    return _extract_eps_trend_current_estimate_from_soup(soup)
 
 
 def _to_float(value):
@@ -948,12 +1165,6 @@ def _build_expectation_overall_conclusion(beat_miss, guidance, eps_trend):
 def _build_expectation_guidance_snapshot(
     symbol,
     news=None,
-    exa_api_key=None,
-    tavily_api_key=None,
-    ai_provider=None,
-    ai_api_key=None,
-    ai_model=None,
-    ai_base_url=None,
 ):
     snapshot = _empty_expectation_guidance_snapshot()
     earnings_history_df = pd.DataFrame()
@@ -994,6 +1205,7 @@ def _to_bounded_pct(numerator, denominator):
 
 def _empty_financial_snapshot():
     return {
+        "currency": None,
         "latest_period": None,
         "latest_report_date": None,
         "latest_period_type": None,
@@ -1376,6 +1588,9 @@ def _get_financial_from_yfinance(symbol):
         ticker = yf.Ticker(symbol)
         info = getattr(ticker, "info", None)
         info = info if isinstance(info, dict) else {}
+        financial_currency = _normalize_currency_code(
+            _mapping_get_text(info, "financialCurrency", "currency")
+        )
         fallback_roe_pct = _extract_info_roe_pct(info)
 
         quarterly_balance = _pick_statement_frame(
@@ -1419,6 +1634,7 @@ def _get_financial_from_yfinance(symbol):
             )
             if not result.get("latest_report_date"):
                 result["latest_report_date"] = result.get("latest_period")
+            result["currency"] = financial_currency
             return result
 
         annual = getattr(ticker, "income_stmt", None)
@@ -1452,7 +1668,9 @@ def _get_financial_from_yfinance(symbol):
             )
             if not result.get("latest_report_date"):
                 result["latest_report_date"] = result.get("latest_period")
+            result["currency"] = financial_currency
             return result
+        result["currency"] = financial_currency
     except Exception:
         return result
 
@@ -1654,8 +1872,14 @@ def _get_realtime_from_finnhub(bundle):
         pe_ttm = float(price) / float(eps_ttm)
     if not _is_number(pe_ttm):
         pe_ttm = metric.get("peTTM")
+    quote_currency = _normalize_currency_code(profile.get("currency"))
+    stock_name = _mapping_get_text(profile, "name", "ticker")
+    trade_date = _to_iso_date_from_epoch(quote.get("t"))
 
     return {
+        "stock_name": stock_name,
+        "trade_date": trade_date,
+        "currency": quote_currency,
         "price": _round(price),
         "change_pct": _round(change_pct),
         "market_cap_b": market_cap_b,
@@ -1677,6 +1901,22 @@ def _mapping_get_number(mapping, *keys):
             value = None
         if _is_number(value):
             return float(value)
+    return None
+
+
+def _mapping_get_text(mapping, *keys):
+    if not hasattr(mapping, "get"):
+        return None
+    for key in keys:
+        try:
+            value = mapping.get(key)
+        except Exception:
+            value = None
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
     return None
 
 
@@ -1713,6 +1953,9 @@ def _yfinance_history_prices(ticker):
 
 def _get_realtime_from_yfinance(symbol):
     empty = {
+        "stock_name": None,
+        "trade_date": None,
+        "currency": None,
         "price": None,
         "change_pct": None,
         "market_cap_b": None,
@@ -1752,6 +1995,18 @@ def _get_realtime_from_yfinance(symbol):
         _mapping_get_number(fast_info, "trailingPE", "trailing_pe"),
         _mapping_get_number(info, "trailingPE"),
     )
+    quote_currency = _normalize_currency_code(
+        _mapping_get_text(info, "currency")
+        or _mapping_get_text(fast_info, "currency")
+        or _mapping_get_text(info, "financialCurrency")
+    )
+    stock_name = _mapping_get_text(info, "shortName", "longName", "displayName", "symbol")
+    trade_date = _to_iso_date_from_epoch(
+        _first_valid_number(
+            _mapping_get_number(info, "regularMarketTime", "postMarketTime", "preMarketTime"),
+            _mapping_get_number(fast_info, "lastTradeTime", "last_trade_time"),
+        )
+    )
 
     closes, volumes = _yfinance_history_prices(ticker)
     if not closes:
@@ -1771,8 +2026,18 @@ def _get_realtime_from_yfinance(symbol):
     turnover_b = None
     if valid_closes and valid_volumes:
         turnover_b = _to_billions(float(valid_closes[-1]) * float(valid_volumes[-1]))
+    if trade_date is None:
+        try:
+            recent_hist = ticker.history(period="7d", interval="1d", auto_adjust=False)
+        except Exception:
+            recent_hist = None
+        if isinstance(recent_hist, pd.DataFrame) and not recent_hist.empty:
+            trade_date = _safe_iso_date(recent_hist.index[-1])
 
     return {
+        "stock_name": stock_name,
+        "trade_date": trade_date,
+        "currency": quote_currency,
         "price": _round(price),
         "change_pct": _pct_change(price, prev_close),
         "market_cap_b": _to_billions(market_cap),
@@ -1790,6 +2055,37 @@ def _merge_realtime_snapshot(primary, fallback):
         if merged.get(key) is None:
             merged[key] = value
     return merged
+
+
+def _attach_currency_snapshot(symbol, realtime, financial, forecast, finnhub_bundle=None):
+    profile = finnhub_bundle.get("profile", {}) if isinstance(finnhub_bundle, dict) else {}
+    inferred = _infer_currency_from_symbol(symbol)
+
+    quote_currency = _normalize_currency_code((realtime or {}).get("currency"))
+    if not quote_currency and isinstance(profile, dict):
+        quote_currency = _normalize_currency_code(profile.get("currency"))
+
+    financial_currency = _normalize_currency_code((financial or {}).get("currency"))
+    raw_forecast_currency = _normalize_currency_code((forecast or {}).get("currency"))
+
+    if not quote_currency:
+        quote_currency = financial_currency or raw_forecast_currency or inferred
+    if not financial_currency:
+        financial_currency = quote_currency or raw_forecast_currency or inferred
+    forecast_currency = financial_currency or quote_currency or raw_forecast_currency or inferred
+
+    if isinstance(realtime, dict):
+        realtime["currency"] = quote_currency
+    if isinstance(financial, dict):
+        financial["currency"] = financial_currency
+    if isinstance(forecast, dict):
+        forecast["currency"] = forecast_currency
+
+    return {
+        "quote": quote_currency,
+        "financial": financial_currency,
+        "forecast": forecast_currency,
+    }
 
 
 def _to_iso_date_from_text(text):
@@ -1848,160 +2144,6 @@ def _extract_next_year_eps(qs):
             eps = _extract_raw(item, ["epsEstimate"])
             if _is_number(eps):
                 return float(eps)
-
-    return None
-
-
-def _extract_next_quarter_eps_from_yfinance(symbol):
-    if yf is None:
-        return None
-
-    def _to_number(value):
-        if _is_number(value):
-            return float(value)
-        try:
-            parsed = float(value)
-            return parsed if _is_number(parsed) else None
-        except Exception:
-            return None
-
-    def _pick_from_df(df, candidate_cols):
-        if not isinstance(df, pd.DataFrame) or df.empty:
-            return None
-
-        rows = []
-        for idx in df.index:
-            token = str(idx).strip().lower().replace(" ", "")
-            rows.append((token, idx))
-
-        for wanted in ("+1q", "1q", "nextquarter", "nextq"):
-            for token, original_idx in rows:
-                if token != wanted:
-                    continue
-                for col in candidate_cols:
-                    if col in df.columns:
-                        value = _to_number(df.at[original_idx, col])
-                        if value is not None:
-                            return value
-
-        for token, original_idx in rows:
-            if "q" not in token or token in {"0q", "+0q", "currentq", "currq"}:
-                continue
-            for col in candidate_cols:
-                if col in df.columns:
-                    value = _to_number(df.at[original_idx, col])
-                    if value is not None:
-                        return value
-        return None
-
-    try:
-        ticker = yf.Ticker(symbol)
-    except Exception:
-        return None
-
-    try:
-        estimate_df = None
-        try:
-            estimate_df = ticker.get_earnings_estimate()
-        except Exception:
-            estimate_df = getattr(ticker, "earnings_estimate", None)
-        eps = _pick_from_df(estimate_df, candidate_cols=["avg", "current"])
-        if eps is not None:
-            return eps
-    except Exception:
-        pass
-
-    try:
-        trend_df = None
-        try:
-            trend_df = ticker.get_eps_trend()
-        except Exception:
-            trend_df = getattr(ticker, "eps_trend", None)
-        eps = _pick_from_df(
-            trend_df,
-            candidate_cols=["current", "7daysAgo", "30daysAgo", "60daysAgo", "90daysAgo"],
-        )
-        if eps is not None:
-            return eps
-    except Exception:
-        pass
-
-    return None
-
-
-def _extract_next_year_eps_from_yfinance(symbol):
-    if yf is None:
-        return None
-
-    def _to_number(value):
-        if _is_number(value):
-            return float(value)
-        try:
-            parsed = float(value)
-            return parsed if _is_number(parsed) else None
-        except Exception:
-            return None
-
-    def _pick_from_df(df, candidate_cols):
-        if not isinstance(df, pd.DataFrame) or df.empty:
-            return None
-
-        rows = []
-        for idx in df.index:
-            token = str(idx).strip().lower().replace(" ", "")
-            rows.append((token, idx))
-
-        for wanted in ("+1y", "1y", "nextyear", "nexty"):
-            for token, original_idx in rows:
-                if token != wanted:
-                    continue
-                for col in candidate_cols:
-                    if col in df.columns:
-                        value = _to_number(df.at[original_idx, col])
-                        if value is not None:
-                            return value
-
-        for token, original_idx in rows:
-            if "y" not in token or "q" in token or token in {"0y", "+0y", "currentyear", "curryear", "curry"}:
-                continue
-            for col in candidate_cols:
-                if col in df.columns:
-                    value = _to_number(df.at[original_idx, col])
-                    if value is not None:
-                        return value
-        return None
-
-    try:
-        ticker = yf.Ticker(symbol)
-    except Exception:
-        return None
-
-    try:
-        estimate_df = None
-        try:
-            estimate_df = ticker.get_earnings_estimate()
-        except Exception:
-            estimate_df = getattr(ticker, "earnings_estimate", None)
-        eps = _pick_from_df(estimate_df, candidate_cols=["avg", "current"])
-        if eps is not None:
-            return eps
-    except Exception:
-        pass
-
-    try:
-        trend_df = None
-        try:
-            trend_df = ticker.get_eps_trend()
-        except Exception:
-            trend_df = getattr(ticker, "eps_trend", None)
-        eps = _pick_from_df(
-            trend_df,
-            candidate_cols=["current", "7daysAgo", "30daysAgo", "60daysAgo", "90daysAgo"],
-        )
-        if eps is not None:
-            return eps
-    except Exception:
-        pass
 
     return None
 
@@ -2113,6 +2255,7 @@ def _extract_next_earnings_date_from_yfinance_ticker(ticker):
 
 def _get_prediction_fields_from_yfinance(symbol):
     empty = {
+        "currency": None,
         "eps_forecast": None,
         "next_year_eps_forecast": None,
         "next_quarter_eps_forecast": None,
@@ -2125,6 +2268,14 @@ def _get_prediction_fields_from_yfinance(symbol):
         ticker = yf.Ticker(symbol)
     except Exception:
         return empty
+    try:
+        info = getattr(ticker, "info", None)
+    except Exception:
+        info = None
+    info = info if isinstance(info, dict) else {}
+    prediction_currency = _normalize_currency_code(
+        _mapping_get_text(info, "financialCurrency", "currency")
+    )
 
     estimate_df = None
     trend_df = None
@@ -2216,6 +2367,7 @@ def _get_prediction_fields_from_yfinance(symbol):
         )
 
     return {
+        "currency": prediction_currency,
         "eps_forecast": _round(current_year_eps),
         "next_year_eps_forecast": _round(next_year_eps),
         "next_quarter_eps_forecast": _round(next_quarter_eps),
@@ -2261,10 +2413,11 @@ def _extract_next_earnings_date(qs):
 def _get_forecast_from_yahoo(symbol):
     page = _parse_yahoo_pages(symbol)
     metrics = page.get("display_metrics", {})
-    try:
-        eps_trend = _extract_eps_trend_current_estimate(symbol)
-    except Exception:
-        eps_trend = {"current_year_eps": None, "next_qtr_eps": None, "next_year_eps": None}
+    eps_trend = (
+        page.get("analysis_eps_trend")
+        if isinstance(page.get("analysis_eps_trend"), dict)
+        else {"current_year_eps": None, "next_qtr_eps": None, "next_year_eps": None}
+    )
 
     qs = {}
     if isinstance(page.get("quote_summary"), dict):
@@ -2318,18 +2471,21 @@ def _get_forecast_from_yahoo(symbol):
         metrics.get("Next Year EPS Est"),
         metrics.get("Next Y EPS Est"),
         _extract_next_year_eps(qs),
-        _extract_next_year_eps_from_yfinance(symbol),
     )
     next_quarter_eps_forecast = _first_valid_number(
         eps_trend.get("next_qtr_eps"),
         metrics.get("Next Qtr. EPS Est"),
         metrics.get("Current Qtr. EPS Est"),
         _extract_next_quarter_eps(qs),
-        _extract_next_quarter_eps_from_yfinance(symbol),
     )
     next_earnings_date = _extract_next_earnings_date(qs)
+    forecast_currency = _normalize_currency_code(
+        _extract_raw(qs, ["summaryDetail", "currency"])
+        or _extract_raw(qs, ["financialData", "financialCurrency"])
+    )
 
     return {
+        "currency": forecast_currency,
         "forward_pe": _round(forward_pe),
         "peg": _round(peg),
         "ev_to_ebitda": _round(ev_to_ebitda),
@@ -2370,7 +2526,8 @@ def _fetch_news_finnhub(symbol, api_key, limit=NEWS_ITEMS_PER_STOCK):
                 }
             )
         return [i for i in items if i.get("title")]
-    except Exception:
+    except Exception as exc:
+        _record_fetch_issue("finnhub.company_news", exc=exc)
         return []
 
 
@@ -2396,8 +2553,8 @@ def _fetch_news_rss(symbol, limit=NEWS_ITEMS_PER_STOCK):
                     "published_at": dt,
                 }
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        _record_fetch_issue("yahoo.rss", exc=exc)
     return [i for i in items if i.get("title")]
 
 
@@ -2421,12 +2578,26 @@ def get_stock_bundle(
     symbol,
     finnhub_api_key,
     force_refresh_financial=False,
-    exa_api_key=None,
-    tavily_api_key=None,
-    ai_provider=None,
-    ai_api_key=None,
-    ai_model=None,
-    ai_base_url=None,
+):
+    token = _start_issue_collection()
+    try:
+        stock = _get_stock_bundle_inner(
+            symbol=symbol,
+            finnhub_api_key=finnhub_api_key,
+            force_refresh_financial=force_refresh_financial,
+        )
+    finally:
+        issues = _finish_issue_collection(token)
+
+    if isinstance(stock, dict) and issues:
+        stock["warnings"] = issues
+    return stock
+
+
+def _get_stock_bundle_inner(
+    symbol,
+    finnhub_api_key,
+    force_refresh_financial=False,
 ):
     symbol = symbol.upper()
     finnhub_api_key = str(finnhub_api_key or "").strip()
@@ -2437,19 +2608,24 @@ def get_stock_bundle(
         try:
             finnhub_bundle = _finnhub_bundle(symbol, finnhub_api_key)
             realtime = _get_realtime_from_finnhub(finnhub_bundle)
-        except Exception:
+        except Exception as exc:
+            _record_fetch_issue("finnhub.bundle", exc=exc)
             finnhub_bundle = {}
             realtime = {}
 
     # 无 Finnhub Key 或 Finnhub 口径缺失时，使用 yfinance 兜底补齐。
     if not finnhub_api_key or realtime.get("price") is None:
-        realtime = _merge_realtime_snapshot(realtime, _get_realtime_from_yfinance(symbol))
+        try:
+            realtime = _merge_realtime_snapshot(realtime, _get_realtime_from_yfinance(symbol))
+        except Exception as exc:
+            _record_fetch_issue("yfinance.realtime", exc=exc)
 
     cached_payload = None
     if not force_refresh_financial:
         try:
             cached_payload = get_cached_financial_bundle(symbol, ttl_hours=_financial_cache_ttl_hours())
-        except Exception:
+        except Exception as exc:
+            _record_fetch_issue("cache.financial.read", exc=exc)
             cached_payload = None
 
     if isinstance(cached_payload, dict):
@@ -2466,13 +2642,15 @@ def get_stock_bundle(
         )
         try:
             set_cached_financial_bundle(symbol, financial, ai_financial_context)
-        except Exception:
-            pass
+        except Exception as exc:
+            _record_fetch_issue("cache.financial.write", exc=exc)
 
     try:
         forecast = _get_forecast_from_yahoo(symbol)
-    except Exception:
+    except Exception as exc:
+        _record_fetch_issue("yahoo.forecast", exc=exc)
         forecast = {
+            "currency": None,
             "forward_pe": None,
             "peg": None,
             "ev_to_ebitda": None,
@@ -2486,41 +2664,61 @@ def get_stock_bundle(
 
     try:
         yfinance_prediction = _get_prediction_fields_from_yfinance(symbol)
-    except Exception:
+    except Exception as exc:
+        _record_fetch_issue("yfinance.prediction", exc=exc)
         yfinance_prediction = {
+            "currency": None,
             "eps_forecast": None,
             "next_year_eps_forecast": None,
             "next_quarter_eps_forecast": None,
             "next_earnings_date": None,
         }
 
-    # 产品要求：这四个“预测”字段统一使用 yfinance，避免混入网页解析口径。
     forecast.update(
         {
-            "eps_forecast": yfinance_prediction.get("eps_forecast"),
-            "next_year_eps_forecast": yfinance_prediction.get("next_year_eps_forecast"),
-            "next_quarter_eps_forecast": yfinance_prediction.get("next_quarter_eps_forecast"),
-            "next_earnings_date": yfinance_prediction.get("next_earnings_date"),
+            "currency": yfinance_prediction.get("currency") or forecast.get("currency"),
+            "eps_forecast": _first_valid_number(
+                yfinance_prediction.get("eps_forecast"),
+                forecast.get("eps_forecast"),
+            ),
+            "next_year_eps_forecast": _first_valid_number(
+                yfinance_prediction.get("next_year_eps_forecast"),
+                forecast.get("next_year_eps_forecast"),
+            ),
+            "next_quarter_eps_forecast": _first_valid_number(
+                yfinance_prediction.get("next_quarter_eps_forecast"),
+                forecast.get("next_quarter_eps_forecast"),
+            ),
+            "next_earnings_date": (
+                yfinance_prediction.get("next_earnings_date") or forecast.get("next_earnings_date")
+            ),
         }
     )
+    currency = _attach_currency_snapshot(
+        symbol,
+        realtime=realtime,
+        financial=financial,
+        forecast=forecast,
+        finnhub_bundle=finnhub_bundle,
+    )
 
-    news = _get_recent_news(symbol, finnhub_api_key, limit=NEWS_ITEMS_PER_STOCK)
+    try:
+        news = _get_recent_news(symbol, finnhub_api_key, limit=NEWS_ITEMS_PER_STOCK)
+    except Exception as exc:
+        _record_fetch_issue("news.aggregate", exc=exc)
+        news = []
     try:
         expectation_guidance = _build_expectation_guidance_snapshot(
             symbol,
             news=news,
-            exa_api_key=exa_api_key,
-            tavily_api_key=tavily_api_key,
-            ai_provider=ai_provider,
-            ai_api_key=ai_api_key,
-            ai_model=ai_model,
-            ai_base_url=ai_base_url,
         )
-    except Exception:
+    except Exception as exc:
+        _record_fetch_issue("expectation_guidance", exc=exc)
         expectation_guidance = _empty_expectation_guidance_snapshot()
 
     stock = {
         "symbol": symbol,
+        "currency": currency,
         "realtime": realtime,
         "financial": financial,
         "forecast": forecast,
@@ -2535,16 +2733,45 @@ def _render_num(value):
     return "-" if value is None else str(value)
 
 
-def _format_financial_context_for_ai(context):
+def _stock_section_currency(stock, section):
+    stock = stock if isinstance(stock, dict) else {}
+    currency = stock.get("currency", {}) if isinstance(stock.get("currency"), dict) else {}
+    section_data = stock.get(section, {}) if isinstance(stock.get(section), dict) else {}
+
+    if section == "forecast":
+        return (
+            _normalize_currency_code(section_data.get("currency"))
+            or _normalize_currency_code(currency.get("forecast"))
+            or _normalize_currency_code(currency.get("financial"))
+            or _normalize_currency_code(currency.get("quote"))
+        )
+    if section == "financial":
+        return (
+            _normalize_currency_code(section_data.get("currency"))
+            or _normalize_currency_code(currency.get("financial"))
+            or _normalize_currency_code(currency.get("quote"))
+        )
+    if section == "realtime":
+        return (
+            _normalize_currency_code(section_data.get("currency"))
+            or _normalize_currency_code(currency.get("quote"))
+            or _normalize_currency_code(currency.get("financial"))
+        )
+    return None
+
+
+def _format_financial_context_for_ai(context, currency_code=None):
     annual = context.get("annual", []) if isinstance(context, dict) else []
     quarterly = context.get("quarterly", []) if isinstance(context, dict) else []
+    unit = f"B {currency_code}" if _normalize_currency_code(currency_code) else "B (Local Currency)"
 
     annual_lines = []
     for row in annual:
         annual_lines.append(
-            "- {period}: Revenue(B USD)={rev}, GrossMargin(%)={gm}, OpMargin(%)={om}, "
-            "NetIncome(B USD)={ni}, EPS(Diluted)={eps}, OCF(B USD)={ocf}, FCF(B USD)={fcf}".format(
+            "- {period}: Revenue({unit})={rev}, GrossMargin(%)={gm}, OpMargin(%)={om}, "
+            "NetIncome({unit})={ni}, EPS(Diluted)={eps}, OCF({unit})={ocf}, FCF({unit})={fcf}".format(
                 period=row.get("period_end") or "-",
+                unit=unit,
                 rev=_render_num(row.get("revenue_b")),
                 gm=_render_num(row.get("gross_margin_pct")),
                 om=_render_num(row.get("operating_margin_pct")),
@@ -2558,11 +2785,12 @@ def _format_financial_context_for_ai(context):
     quarterly_lines = []
     for row in quarterly:
         quarterly_lines.append(
-            "- {period} (FY{fy} Q{fq}): Revenue(B USD)={rev}, GrossMargin(%)={gm}, "
-            "OpMargin(%)={om}, NetIncome(B USD)={ni}, EPS(Diluted)={eps}, OCF(B USD)={ocf}, FCF(B USD)={fcf}".format(
+            "- {period} (FY{fy} Q{fq}): Revenue({unit})={rev}, GrossMargin(%)={gm}, "
+            "OpMargin(%)={om}, NetIncome({unit})={ni}, EPS(Diluted)={eps}, OCF({unit})={ocf}, FCF({unit})={fcf}".format(
                 period=row.get("period_end") or "-",
                 fy=_render_num(row.get("fiscal_year")),
                 fq=_render_num(row.get("fiscal_quarter")),
+                unit=unit,
                 rev=_render_num(row.get("revenue_b")),
                 gm=_render_num(row.get("gross_margin_pct")),
                 om=_render_num(row.get("operating_margin_pct")),
@@ -3082,7 +3310,7 @@ def _build_financial_analysis_stock_context(stock):
     )
 
 
-def _build_financial_analysis_prompt(symbols, stocks, external_search_context=None):
+def _build_financial_analysis_prompt(symbols, stocks, external_search_context=None, language="zh"):
     selected = _select_requested_stocks(symbols, stocks)
     if not selected:
         return None
@@ -3101,9 +3329,54 @@ def _build_financial_analysis_prompt(symbols, stocks, external_search_context=No
         if has_external_search
         else ""
     )
+    is_en = _is_english(language)
+
+    if is_en:
+        search_requirement_en = (
+            "- Prioritize the external search results below (from Exa/Tavily); do not call model search tools again."
+            if has_external_search
+            else "- You may use model search as fallback, prioritizing earnings news and analyst notes from the last 60 days."
+        )
+        search_block_en = (
+            f"\nExternal search results (from Exa/Tavily):\n{str(external_search_context).strip()}\n"
+            if has_external_search
+            else ""
+        )
+        min_sources = 3 if len(selected) <= 1 else 5
+        return f"""
+You are a global equity financial analyst. Produce a "Financial Analysis" report for: {symbols_str}. Date (UTC): {today_utc}.
+
+Required framework (from long-term to near-term):
+1) Analyze the last 3 fiscal years: revenue growth, margins, free cash flow, and ROE. Judge business model strength and long-term operating trend.
+2) Analyze the last 4 quarters: revenue/profit growth and margin profile. Judge whether short- to mid-term operations are strengthening or weakening.
+3) Review the latest earnings and next-quarter forecast, and include a dedicated section for "Estimate Revisions & Earnings Assessment (latest report + next quarter)".
+4) End with an overall conclusion.
+
+Hard requirements:
+- Lead with conclusions and avoid mechanical data dumping; cite at most 2-3 key numbers per section.
+{search_requirement_en}
+- If evidence for surprise/revision is insufficient, explicitly write "Information insufficient" and specify what is missing (surprise, analyst revisions, or next-quarter consensus).
+- Keep this section strictly financial; do not provide buy/sell decisions or 3-6 month investment advice.
+- Output must be English Markdown (no JSON/HTML).
+- Provide references with title/institution, date, and link. Minimum {min_sources} sources.
+
+Output structure (must include all lines for each stock):
+### {{Ticker}}
+- Latest reporting period:
+- Last 3 years (competitiveness & long-term trend):
+- Last 4 quarters (short/mid-term operating trend):
+- Latest report + next-quarter forecast (revision/surprise assessment):
+- Overall conclusion:
+
+## References
+
+{search_block_en}
+Stock context:
+{chr(10).join(blocks)}
+""".strip()
 
     return f"""
-你是美股财务分析专家。请对以下股票做“财务分析”模块输出：{symbols_str}。当前日期（UTC）: {today_utc}。
+你是全球股票财务分析专家。请对以下股票做“财务分析”模块输出：{symbols_str}。当前日期（UTC）: {today_utc}。
 你必须按以下分析框架执行（由远及近）：
 1) 先分析近3年财务数据：关注营收增速、利润率、自由现金流、ROE，判断商业模式竞争力与长期经营趋势。
 2) 再分析近4季度财务数据：关注营收/利润增速与毛利率水平，判断中短期经营态势是否强化或走弱。
@@ -3141,6 +3414,7 @@ def _generate_financial_analysis_with_ai(
     base_url=None,
     exa_api_key=None,
     tavily_api_key=None,
+    language="zh",
 ):
     external_search_context = _build_external_search_context(
         symbols=symbols,
@@ -3149,11 +3423,17 @@ def _generate_financial_analysis_with_ai(
         tavily_api_key=tavily_api_key,
         lookback_days=60,
     )
-    prompt = _build_financial_analysis_prompt(symbols, stocks, external_search_context=external_search_context)
+    lang = _normalize_ui_language(language)
+    prompt = _build_financial_analysis_prompt(
+        symbols,
+        stocks,
+        external_search_context=external_search_context,
+        language=lang,
+    )
     if not prompt:
-        return "", "缺少可分析的股票上下文。"
+        return "", "Missing stock context for analysis." if lang == "en" else "缺少可分析的股票上下文。"
     if not api_key or not model:
-        return "", "未配置 AI API Key 或模型名。"
+        return "", "AI API key or model is not configured." if lang == "en" else "未配置 AI API Key 或模型名。"
 
     return _run_ai_with_auto_continue(
         provider=provider,
@@ -3162,7 +3442,12 @@ def _generate_financial_analysis_with_ai(
         model=model,
         base_url=base_url,
         enable_model_search=not bool(str(external_search_context or "").strip()),
-        continue_prompt="继续未完成部分，不要重复已输出内容，完成到最后的“总体结论”和“参考来源”。",
+        continue_prompt=(
+            "Continue only the unfinished part. Do not repeat previous text. Finish with overall conclusion and references."
+            if lang == "en"
+            else "继续未完成部分，不要重复已输出内容，完成到最后的“总体结论”和“参考来源”。"
+        ),
+        language=lang,
     )
 
 
@@ -3175,8 +3460,10 @@ def generate_financial_analysis(
     base_url=None,
     exa_api_key=None,
     tavily_api_key=None,
+    language="zh",
 ):
     local_text = _generate_financial_analysis_local(symbols, stocks)
+    lang = _normalize_ui_language(language)
     if api_key and model:
         try:
             ai_result = _generate_financial_analysis_with_ai(
@@ -3188,19 +3475,37 @@ def generate_financial_analysis(
                 base_url=base_url,
                 exa_api_key=exa_api_key,
                 tavily_api_key=tavily_api_key,
+                language=lang,
             )
         except TypeError as exc:
             # 测试替身可能仍是旧签名，不接受新增参数。
-            if "exa_api_key" not in str(exc) and "tavily_api_key" not in str(exc):
+            if (
+                "exa_api_key" not in str(exc)
+                and "tavily_api_key" not in str(exc)
+                and "language" not in str(exc)
+            ):
                 raise
-            ai_result = _generate_financial_analysis_with_ai(
-                symbols=symbols,
-                stocks=stocks,
-                provider=provider,
-                api_key=api_key,
-                model=model,
-                base_url=base_url,
-            )
+            try:
+                ai_result = _generate_financial_analysis_with_ai(
+                    symbols=symbols,
+                    stocks=stocks,
+                    provider=provider,
+                    api_key=api_key,
+                    model=model,
+                    base_url=base_url,
+                    language=lang,
+                )
+            except TypeError as nested_exc:
+                if "language" not in str(nested_exc):
+                    raise
+                ai_result = _generate_financial_analysis_with_ai(
+                    symbols=symbols,
+                    stocks=stocks,
+                    provider=provider,
+                    api_key=api_key,
+                    model=model,
+                    base_url=base_url,
+                )
         if isinstance(ai_result, tuple):
             ai_text = str(ai_result[0] or "")
             ai_error = str(ai_result[1] or "")
@@ -3232,7 +3537,10 @@ def _compact_stock_context(stock):
         f"股票: {symbol}\n"
         f"近况参考: 日涨跌幅={rt.get('change_pct')}%, 5日={rt.get('change_5d_pct')}%, 20日={rt.get('change_20d_pct')}%, 250日={rt.get('change_250d_pct')}%\n"
         f"估值参考: PE(TTM)={rt.get('pe_ttm')}, Forward PE={fc.get('forward_pe')}, PEG={fc.get('peg')}, 下季度EPS={fc.get('next_quarter_eps_forecast')}, 下次财报日={fc.get('next_earnings_date')}\n"
-        + _format_financial_context_for_ai(stock.get("ai_financial_context"))
+        + _format_financial_context_for_ai(
+            stock.get("ai_financial_context"),
+            currency_code=_stock_section_currency(stock, "financial"),
+        )
         + "\n"
         f"相关新闻:\n" + ("\n".join(headline_lines) if headline_lines else "- 无可用新闻")
     )
@@ -3268,13 +3576,16 @@ def _build_target_price_stock_context(stock):
         f"估值锚点: PE(TTM)={rt.get('pe_ttm')}, Forward PE={fc.get('forward_pe')}, PEG={fc.get('peg')}, EV/EBITDA={fc.get('ev_to_ebitda')}, P/S={fc.get('ps')}, P/B={fc.get('pb')}\n"
         f"盈利预测锚点: 当前年EPS={fc.get('eps_forecast')}, 下一年EPS={fc.get('next_year_eps_forecast')}, 下季度EPS={fc.get('next_quarter_eps_forecast')}, 下次财报日={fc.get('next_earnings_date')}\n"
         f"目标价计算口径: 目标价 = Forward PE × EPS；EPS 仅使用 next_year_eps_forecast，若缺失则回退到 next_quarter_eps_forecast × 4；当前建议EPS锚点={eps_anchor_value}（来源={eps_anchor_source}，{eps_anchor_note}）\n"
-        + _format_financial_context_for_ai(stock.get("ai_financial_context"))
+        + _format_financial_context_for_ai(
+            stock.get("ai_financial_context"),
+            currency_code=_stock_section_currency(stock, "financial"),
+        )
         + "\n"
         f"相关新闻:\n" + ("\n".join(headline_lines) if headline_lines else "- 无可用新闻")
     )
 
 
-def _build_target_price_prompt(symbols, stocks, external_search_context=None):
+def _build_target_price_prompt(symbols, stocks, external_search_context=None, language="zh"):
     blocks = [_build_target_price_stock_context(stock) for stock in stocks if stock.get("symbol") in symbols]
     if not blocks:
         return None
@@ -3292,9 +3603,58 @@ def _build_target_price_prompt(symbols, stocks, external_search_context=None):
         else ""
     )
     min_sources = 3 if len(symbols) <= 1 else 5
+    is_en = _is_english(language)
+
+    if is_en:
+        search_requirement_text_en = (
+            "Prioritize external search results below (from Exa/Tavily); do not call model search tools again."
+            if has_external_search
+            else "Use model search to supplement the latest news/research, prioritizing the last 45 days."
+        )
+        search_block_en = (
+            f"\nExternal search results (from Exa/Tavily):\n{str(external_search_context).strip()}\n"
+            if has_external_search
+            else ""
+        )
+        return f"""
+You are a global equity valuation analyst. Provide scenario-based target price analysis for: {', '.join(symbols)}. Date (UTC): {today_utc}.
+Core task:
+- Build bull/base/bear scenarios and provide valuation ranges and 3-6 month target price ranges for each stock.
+- Each scenario must include key assumptions and be auditable.
+
+Hard requirements:
+1) {search_requirement_text_en}
+2) Use fixed formula: Target Price = EPS (next year) × Target PE. PE must be next-year perspective, not just current spot forward PE.
+3) Explicitly show the relationship: Target Price = Forward PE × EPS (Forward PE here means next-year target PE range).
+4) EPS must use next_year_eps_forecast; if missing, fallback to next_quarter_eps_forecast × 4 and label as fallback. If still missing, write "Information insufficient".
+5) Target PE must use three anchors with fixed weights: 40% / 35% / 25%.
+6) Anchor A: prioritize 5-year average forward PE; 3-year average only for mean-reversion direction check.
+7) Anchor B: PEG adjustment uses Bull/Base/Bear = 1.4/1.2/1.0 with next-year profit growth constraints.
+8) Anchor C: auto-select 3-5 comparable peers.
+9) Sentiment adjustment capped at ±5%; PE shift fixed at +15% / 0 / -15% for Bull / Base / Bear.
+10) Each stock must include all three scenarios and each scenario must include EPS basis, target PE range, target price range, and 2-4 key assumptions.
+11) Show final target PE ranges only; do not show intermediate A/B/C calculations.
+12) Use ranges (prefer integer/rounded bands), not over-precise decimals.
+13) If data is insufficient, explicitly say "Information insufficient" and list missing items.
+14) Output must be English Markdown (no JSON/HTML).
+15) Include at least {min_sources} references with title/institution, date, and link.
+
+Recommended output structure (required lines for each stock):
+### {{Ticker}}
+- Bull scenario: EPS basis=...; target PE range=...; target price range=... (Target Price = Forward PE × EPS); key assumptions=...
+- Base scenario: EPS basis=...; target PE range=...; target price range=... (Target Price = Forward PE × EPS); key assumptions=...
+- Bear scenario: EPS basis=...; target PE range=...; target price range=... (Target Price = Forward PE × EPS); key assumptions=...
+- Scenario conclusion:
+
+## References
+
+{search_block_en}
+Stock context:
+{chr(10).join(blocks)}
+""".strip()
 
     return f"""
-你是美股估值分析师。请对以下股票给出“目标价”情景分析：{', '.join(symbols)}。当前日期（UTC）: {today_utc}。
+你是全球股票估值分析师。请对以下股票给出“目标价”情景分析：{', '.join(symbols)}。当前日期（UTC）: {today_utc}。
 核心任务：
 - 基于 bull / base / bear 三种情景，给出每只股票的估值区间与3-6个月目标价区间。
 - 每个情景都需要给出关键假设，并确保逻辑可复核。
@@ -3332,7 +3692,7 @@ def _build_target_price_prompt(symbols, stocks, external_search_context=None):
 """.strip()
 
 
-def _build_ai_prompt(symbols, stocks, external_search_context=None):
+def _build_ai_prompt(symbols, stocks, external_search_context=None, language="zh"):
     blocks = [_compact_stock_context(stock) for stock in stocks if stock.get("symbol") in symbols]
     if not blocks:
         return None
@@ -3349,10 +3709,79 @@ def _build_ai_prompt(symbols, stocks, external_search_context=None):
         if has_external_search
         else ""
     )
+    is_en = _is_english(language)
+
+    if is_en:
+        search_requirement_text_en = (
+            "Prioritize external search results below (from Exa/Tavily); do not call model search tools again."
+            if has_external_search
+            else "Use model search to supplement latest news and research views, prioritizing the last 30 days."
+        )
+        search_block_en = (
+            f"\nExternal search results (from Exa/Tavily):\n{str(external_search_context).strip()}\n"
+            if has_external_search
+            else ""
+        )
+        if len(symbols) <= 1:
+            return f"""
+You are a global equity research analyst. Provide an investment view for a single stock ({symbols[0] if symbols else ''}). Date (UTC): {today_utc}.
+Core tasks:
+- Combine macro/market context, sector trend, stock performance, financial quality, and latest news/research into a clear investment view.
+- Focus on judgement and actionable view, not raw data copying.
+
+Hard requirements:
+1) Single-stock scenario only. Do not rank versus other stocks.
+2) {search_requirement_text_en}
+3) Cite only a few critical numbers to support conclusions.
+4) Keep risk section to 1-2 items and include trigger path.
+5) If information is missing, explicitly write "Information insufficient" and specify missing data.
+6) Output must be English Markdown (no JSON/HTML).
+7) Provide at least 3 references with title/institution, date, and link.
+
+Recommended structure:
+## Core conclusion
+## Market and sector view
+## Stock recommendation (3-6 months)
+## Catalysts and validation signals
+## Key risks (1-2)
+## References
+
+{search_block_en}
+Stock context:
+{chr(10).join(blocks)}
+""".strip()
+
+        return f"""
+You are a global equity research analyst. Compare the following stocks and provide investment suggestions: {', '.join(symbols)}. Date (UTC): {today_utc}.
+Core tasks:
+- Combine macro/market context, sector trend, stock performance, financial quality, and latest news/research to produce multi-dimensional comparison and ranking.
+- Focus on analytical judgement, not line-by-line data repetition.
+
+Hard requirements:
+1) {search_requirement_text_en}
+2) Give overall judgement first, then rank investment conclusions (most preferred -> most cautious).
+3) For each stock include: recommendation (Buy/Accumulate/Hold/Reduce), 3-6 month view, and 1-2 key risks.
+4) Risk points must include trigger/impact path and stay concise.
+5) Use limited key figures only; avoid numeric dumping.
+6) If information is missing, explicitly write "Information insufficient" and specify missing data.
+7) Output must be English Markdown (no JSON/HTML).
+8) Provide at least 5 references with title/institution, date, and link.
+
+Recommended structure:
+## Core conclusion
+## Ranked investment view (most preferred -> most cautious)
+## Stock-by-stock analysis
+## Catalysts and monitoring indicators (next 3-6 months)
+## References
+
+{search_block_en}
+Stock context:
+{chr(10).join(blocks)}
+""".strip()
 
     if len(symbols) <= 1:
         return f"""
-你是美股投研分析师。请对单只股票（{symbols[0] if symbols else ''}）给出投资建议。当前日期（UTC）: {today_utc}。
+你是全球股票投研分析师。请对单只股票（{symbols[0] if symbols else ''}）给出投资建议。当前日期（UTC）: {today_utc}。
 核心任务：
 - 结合大盘环境、所属板块趋势、该股市场表现、财务质量、最新新闻/研报，形成研究结论。
 - 重点是“判断与建议”，不是数据搬运；不要逐项复述输入里的表格数字。
@@ -3380,7 +3809,7 @@ def _build_ai_prompt(symbols, stocks, external_search_context=None):
 """.strip()
 
     return f"""
-你是美股投研分析师。请对以下股票做对比分析并给出投资建议：{', '.join(symbols)}。当前日期（UTC）: {today_utc}。
+你是全球股票投研分析师。请对以下股票做对比分析并给出投资建议：{', '.join(symbols)}。当前日期（UTC）: {today_utc}。
 核心任务：
 - 结合大盘环境、所属板块趋势、各股市场表现、财务质量、最新新闻/研报，做多维对比与排序建议。
 - 重点是“分析判断”，不是逐行复述数据。
@@ -3429,18 +3858,19 @@ def _normalize_followup_history(history, max_messages=None):
     return messages
 
 
-def _format_followup_history_lines(history):
+def _format_followup_history_lines(history, language="zh"):
     normalized = _normalize_followup_history(history)
     if not normalized:
-        return "- 无历史追问"
+        return "- No follow-up history" if _is_english(language) else "- 无历史追问"
     lines = []
+    is_en = _is_english(language)
     for msg in normalized:
-        speaker = "用户" if msg.get("role") == "user" else "助手"
+        speaker = ("User" if msg.get("role") == "user" else "Assistant") if is_en else ("用户" if msg.get("role") == "user" else "助手")
         lines.append(f"{speaker}: {msg.get('content')}")
     return "\n".join(lines)
 
 
-def _build_financial_followup_prompt(symbols, stocks, base_analysis, history, question):
+def _build_financial_followup_prompt(symbols, stocks, base_analysis, history, question, language="zh"):
     selected = _select_requested_stocks(symbols, stocks)
     if not selected:
         return None
@@ -3452,11 +3882,37 @@ def _build_financial_followup_prompt(symbols, stocks, base_analysis, history, qu
     today_utc = datetime.now(timezone.utc).date().isoformat()
     symbols_str = ", ".join(str(s.get("symbol")) for s in selected if s.get("symbol"))
     context_blocks = [_build_financial_analysis_stock_context(stock) for stock in selected]
-    history_lines = _format_followup_history_lines(history)
+    history_lines = _format_followup_history_lines(history, language=language)
     base_text = str(base_analysis or "").strip() or "无初始财务分析内容。"
+    is_en = _is_english(language)
+
+    if is_en:
+        base_text_en = str(base_analysis or "").strip() or "No initial financial analysis content."
+        return f"""
+You are a global equity financial analyst handling a multi-turn follow-up for the "Financial Analysis" module. Date (UTC): {today_utc}.
+Covered tickers: {symbols_str}
+
+Answer rules:
+1) Focus only on the latest question; avoid repeating the full original analysis.
+2) Lead with conclusions and support with a few key facts/numbers.
+3) If context is insufficient, explicitly write "Information insufficient" and state missing data.
+4) If citing recent events/research, include references (title/institution, date, link).
+5) Output in English Markdown (no JSON/HTML).
+
+Initial financial analysis:
+{base_text_en}
+
+Conversation history:
+{history_lines}
+
+Latest question: {question_text}
+
+Stock context:
+{chr(10).join(context_blocks)}
+""".strip()
 
     return f"""
-你是美股财务分析专家，正在进行“财务分析”模块的多轮追问。当前日期（UTC）: {today_utc}。
+你是全球股票财务分析专家，正在进行“财务分析”模块的多轮追问。当前日期（UTC）: {today_utc}。
 覆盖股票: {symbols_str}
 
 回答要求：
@@ -3479,7 +3935,7 @@ def _build_financial_followup_prompt(symbols, stocks, base_analysis, history, qu
 """.strip()
 
 
-def _build_ai_followup_prompt(symbols, stocks, base_analysis, history, question):
+def _build_ai_followup_prompt(symbols, stocks, base_analysis, history, question, language="zh"):
     selected = _select_requested_stocks(symbols, stocks)
     if not selected:
         return None
@@ -3491,11 +3947,37 @@ def _build_ai_followup_prompt(symbols, stocks, base_analysis, history, question)
     today_utc = datetime.now(timezone.utc).date().isoformat()
     symbols_str = ", ".join(str(s.get("symbol")) for s in selected if s.get("symbol"))
     context_blocks = [_compact_stock_context(stock) for stock in selected]
-    history_lines = _format_followup_history_lines(history)
+    history_lines = _format_followup_history_lines(history, language=language)
     base_text = str(base_analysis or "").strip() or "无初始投资建议内容。"
+    is_en = _is_english(language)
+
+    if is_en:
+        base_text_en = str(base_analysis or "").strip() or "No initial investment advice content."
+        return f"""
+You are a global equity research analyst handling a multi-turn follow-up for the "AI Investment Advice" module. Date (UTC): {today_utc}.
+Covered tickers: {symbols_str}
+
+Answer rules:
+1) Focus only on the latest question; avoid repeating the full original advice.
+2) Lead with conclusions, and add catalysts, validation signals, or risk triggers when needed.
+3) If context is insufficient, explicitly write "Information insufficient" and state what is missing.
+4) If discussing recent developments/news, provide references when possible (title/institution, date, link).
+5) Output in English Markdown (no JSON/HTML).
+
+Initial investment advice:
+{base_text_en}
+
+Conversation history:
+{history_lines}
+
+Latest question: {question_text}
+
+Stock context:
+{chr(10).join(context_blocks)}
+""".strip()
 
     return f"""
-你是美股投研分析师，正在进行“AI 投资建议”模块的多轮追问。当前日期（UTC）: {today_utc}。
+你是全球股票投研分析师，正在进行“AI 投资建议”模块的多轮追问。当前日期（UTC）: {today_utc}。
 覆盖股票: {symbols_str}
 
 回答要求：
@@ -3518,13 +4000,32 @@ def _build_ai_followup_prompt(symbols, stocks, base_analysis, history, question)
 """.strip()
 
 
-def _generate_followup_response(prompt, stocks, provider, api_key, model, base_url=None):
+def _generate_followup_response(prompt, stocks, provider, api_key, model, base_url=None, language="zh"):
+    lang = _normalize_ui_language(language)
     if not api_key:
-        return "未配置 AI API Key，无法继续追问。"
+        raise _service_error(
+            code="AI_API_KEY_MISSING",
+            language=lang,
+            zh_text="未配置 AI API Key，无法继续追问。",
+            en_text="AI API key is not configured; unable to continue.",
+            status_code=400,
+        )
     if not model:
-        return "未配置 AI 模型名，无法继续追问。"
+        raise _service_error(
+            code="AI_MODEL_MISSING",
+            language=lang,
+            zh_text="未配置 AI 模型名，无法继续追问。",
+            en_text="AI model is not configured; unable to continue.",
+            status_code=400,
+        )
     if not prompt:
-        return "缺少可分析的股票上下文，无法继续追问。"
+        raise _service_error(
+            code="STOCK_CONTEXT_MISSING",
+            language=lang,
+            zh_text="缺少可分析的股票上下文，无法继续追问。",
+            en_text="Missing stock context; unable to continue.",
+            status_code=400,
+        )
 
     full_text, err = _run_ai_with_auto_continue(
         provider=provider,
@@ -3533,11 +4034,24 @@ def _generate_followup_response(prompt, stocks, provider, api_key, model, base_u
         model=model,
         base_url=base_url,
         enable_model_search=True,
-        continue_prompt="继续未完成的部分，只补充未输出内容，不要重复前文。",
+        continue_prompt=(
+            "Continue only the unfinished part. Do not repeat previous text."
+            if lang == "en"
+            else "继续未完成的部分，只补充未输出内容，不要重复前文。"
+        ),
+        language=lang,
     )
     if err:
-        return err
-    return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
+        raise _runtime_ai_error_to_service_error(err, lang)
+    if not full_text:
+        raise _service_error(
+            code="AI_EMPTY_RESPONSE",
+            language=lang,
+            zh_text="AI 返回为空。",
+            en_text="AI returned empty content.",
+            status_code=502,
+        )
+    return _ensure_reference_links(full_text, stocks=stocks)
 
 
 def generate_financial_analysis_followup(
@@ -3550,13 +4064,16 @@ def generate_financial_analysis_followup(
     base_analysis=None,
     history=None,
     base_url=None,
+    language="zh",
 ):
+    lang = _normalize_ui_language(language)
     prompt = _build_financial_followup_prompt(
         symbols=symbols,
         stocks=stocks,
         base_analysis=base_analysis,
         history=history,
         question=question,
+        language=lang,
     )
     return _generate_followup_response(
         prompt=prompt,
@@ -3565,6 +4082,7 @@ def generate_financial_analysis_followup(
         api_key=api_key,
         model=model,
         base_url=base_url,
+        language=lang,
     )
 
 
@@ -3578,13 +4096,16 @@ def generate_ai_investment_followup(
     base_analysis=None,
     history=None,
     base_url=None,
+    language="zh",
 ):
+    lang = _normalize_ui_language(language)
     prompt = _build_ai_followup_prompt(
         symbols=symbols,
         stocks=stocks,
         base_analysis=base_analysis,
         history=history,
         question=question,
+        language=lang,
     )
     return _generate_followup_response(
         prompt=prompt,
@@ -3593,6 +4114,7 @@ def generate_ai_investment_followup(
         api_key=api_key,
         model=model,
         base_url=base_url,
+        language=lang,
     )
 
 
@@ -3660,20 +4182,28 @@ def _call_gemini_once(prompt, api_key, model, enable_model_search=True):
     return "\n".join(texts).strip(), str(first.get("finishReason", "")).lower()
 
 
-def _call_openai_compatible_once(prompt, api_key, model, base_url):
+def _call_openai_compatible_once(prompt, api_key, model, base_url, language="zh"):
     root = (base_url or "https://api.openai.com/v1").rstrip("/")
     url = f"{root}/chat/completions"
+    is_en = _is_english(language)
+    system_text = (
+        "You are a senior global equity analyst. Respond in English with clear structure and actionable conclusions. "
+        "Prioritize analytical judgement over mechanical data repetition. Keep each stock's key risk points to at most two. "
+        "Output Markdown only. Do not output JSON/HTML or extra meta commentary."
+        if is_en
+        else (
+            "你是资深全球股票分析师，回答要中文、结构清晰、可执行。"
+            "以研究判断为主，不要机械复述原始数据。"
+            "个股观点要全面，但每只股票风险点最多2条。"
+            "最终只输出 Markdown，不要输出 JSON、HTML 或额外解释。"
+        )
+    )
     payload = {
         "model": model,
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "你是资深美股分析师，回答要中文、结构清晰、可执行。"
-                    "以研究判断为主，不要机械复述原始数据。"
-                    "个股观点要全面，但每只股票风险点最多2条。"
-                    "最终只输出 Markdown，不要输出 JSON、HTML 或额外解释。"
-                ),
+                "content": system_text,
             },
             {"role": "user", "content": prompt},
         ],
@@ -3722,13 +4252,13 @@ def _call_claude_once(prompt, api_key, model):
     return "\n".join(texts).strip(), str(data.get("stop_reason", "")).lower()
 
 
-def _call_ai_once(provider_key, prompt, api_key, model, base_url=None, enable_model_search=True):
+def _call_ai_once(provider_key, prompt, api_key, model, base_url=None, enable_model_search=True, language="zh"):
     if provider_key == "gemini":
         return _call_gemini_once(prompt, api_key, model, enable_model_search=enable_model_search)
     if provider_key == "claude":
         return _call_claude_once(prompt, api_key, model)
     if provider_key == "openai":
-        return _call_openai_compatible_once(prompt, api_key, model, base_url)
+        return _call_openai_compatible_once(prompt, api_key, model, base_url, language=language)
     raise ValueError(f"不支持的 AI Provider: {provider_key}")
 
 
@@ -3739,6 +4269,7 @@ def _call_ai_once_with_search_flag(
     model,
     base_url=None,
     enable_model_search=True,
+    language="zh",
 ):
     try:
         return _call_ai_once(
@@ -3748,12 +4279,18 @@ def _call_ai_once_with_search_flag(
             model,
             base_url,
             enable_model_search=enable_model_search,
+            language=language,
         )
     except TypeError as exc:
         # 测试替身可能仍使用旧签名，不接受 enable_model_search。
-        if "enable_model_search" not in str(exc):
+        if "enable_model_search" not in str(exc) and "language" not in str(exc):
             raise
-        return _call_ai_once(provider_key, prompt, api_key, model, base_url)
+        try:
+            return _call_ai_once(provider_key, prompt, api_key, model, base_url, enable_model_search=enable_model_search)
+        except TypeError as nested_exc:
+            if "enable_model_search" not in str(nested_exc):
+                raise
+            return _call_ai_once(provider_key, prompt, api_key, model, base_url)
 
 
 def _is_truncated_reason(reason):
@@ -3769,26 +4306,41 @@ def _run_ai_with_auto_continue(
     base_url=None,
     enable_model_search=True,
     continue_prompt="继续未完成的部分，只补充未输出内容，不要重复前文。",
+    language="zh",
 ):
     provider_key = (provider or "").strip().lower()
+    lang = _normalize_ui_language(language)
     if provider_key not in {"openai", "gemini", "claude"}:
-        return "", f"不支持的 AI Provider: {provider}"
+        return "", (f"Unsupported AI provider: {provider}" if lang == "en" else f"不支持的 AI Provider: {provider}")
 
     full_text = ""
     next_prompt = str(prompt or "").strip()
     if not next_prompt:
-        return "", "缺少可分析的股票上下文。"
+        return "", ("Missing stock context for analysis." if lang == "en" else "缺少可分析的股票上下文。")
 
     try:
         for _ in range(AI_AUTO_CONTINUE_MAX_ROUNDS):
-            text, finish_reason = _call_ai_once_with_search_flag(
-                provider_key,
-                next_prompt,
-                api_key,
-                model,
-                base_url,
-                enable_model_search=enable_model_search,
-            )
+            try:
+                text, finish_reason = _call_ai_once_with_search_flag(
+                    provider_key,
+                    next_prompt,
+                    api_key,
+                    model,
+                    base_url,
+                    enable_model_search=enable_model_search,
+                    language=lang,
+                )
+            except TypeError as exc:
+                if "language" not in str(exc):
+                    raise
+                text, finish_reason = _call_ai_once_with_search_flag(
+                    provider_key,
+                    next_prompt,
+                    api_key,
+                    model,
+                    base_url,
+                    enable_model_search=enable_model_search,
+                )
             text = (text or "").strip()
             if text:
                 full_text = (full_text + "\n\n" + text).strip() if full_text else text
@@ -3797,7 +4349,7 @@ def _run_ai_with_auto_continue(
                 break
             next_prompt = continue_prompt
     except Exception as exc:
-        return "", f"AI 调用失败: {exc}"
+        return "", (f"AI call failed: {exc}" if lang == "en" else f"AI 调用失败: {exc}")
 
     return full_text.strip(), None
 
@@ -3811,11 +4363,25 @@ def generate_ai_investment_advice(
     base_url=None,
     exa_api_key=None,
     tavily_api_key=None,
+    language="zh",
 ):
+    lang = _normalize_ui_language(language)
     if not api_key:
-        return "未配置 AI API Key，无法生成投资建议。"
+        raise _service_error(
+            code="AI_API_KEY_MISSING",
+            language=lang,
+            zh_text="未配置 AI API Key，无法生成投资建议。",
+            en_text="AI API key is not configured; unable to generate investment advice.",
+            status_code=400,
+        )
     if not model:
-        return "未配置 AI 模型名，无法生成投资建议。"
+        raise _service_error(
+            code="AI_MODEL_MISSING",
+            language=lang,
+            zh_text="未配置 AI 模型名，无法生成投资建议。",
+            en_text="AI model is not configured; unable to generate investment advice.",
+            status_code=400,
+        )
 
     external_search_context = _build_external_search_context(
         symbols=symbols,
@@ -3824,9 +4390,15 @@ def generate_ai_investment_advice(
         tavily_api_key=tavily_api_key,
         lookback_days=30,
     )
-    prompt = _build_ai_prompt(symbols, stocks, external_search_context=external_search_context)
+    prompt = _build_ai_prompt(symbols, stocks, external_search_context=external_search_context, language=lang)
     if not prompt:
-        return "缺少可分析的股票上下文，无法生成建议。"
+        raise _service_error(
+            code="STOCK_CONTEXT_MISSING",
+            language=lang,
+            zh_text="缺少可分析的股票上下文，无法生成建议。",
+            en_text="Missing stock context; unable to generate advice.",
+            status_code=400,
+        )
 
     full_text, err = _run_ai_with_auto_continue(
         provider=provider,
@@ -3836,13 +4408,29 @@ def generate_ai_investment_advice(
         base_url=base_url,
         enable_model_search=not bool(str(external_search_context or "").strip()),
         continue_prompt=(
-            "你刚才的回答因为长度限制被截断了。请只继续未完成的部分，"
-            "不要重复已经写过的内容，并写到完整收尾。"
+            (
+                "Your previous answer was truncated by output length. Continue only the unfinished part, "
+                "do not repeat prior content, and complete the final closing."
+            )
+            if lang == "en"
+            else (
+                "你刚才的回答因为长度限制被截断了。请只继续未完成的部分，"
+                "不要重复已经写过的内容，并写到完整收尾。"
+            )
         ),
+        language=lang,
     )
     if err:
-        return err
-    return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
+        raise _runtime_ai_error_to_service_error(err, lang)
+    if not full_text:
+        raise _service_error(
+            code="AI_EMPTY_RESPONSE",
+            language=lang,
+            zh_text="AI 返回为空。",
+            en_text="AI returned empty content.",
+            status_code=502,
+        )
+    return _ensure_reference_links(full_text, stocks=stocks)
 
 
 def generate_target_price_analysis(
@@ -3854,11 +4442,25 @@ def generate_target_price_analysis(
     base_url=None,
     exa_api_key=None,
     tavily_api_key=None,
+    language="zh",
 ):
+    lang = _normalize_ui_language(language)
     if not api_key:
-        return "未配置 AI API Key，无法生成目标价分析。"
+        raise _service_error(
+            code="AI_API_KEY_MISSING",
+            language=lang,
+            zh_text="未配置 AI API Key，无法生成目标价分析。",
+            en_text="AI API key is not configured; unable to generate target price analysis.",
+            status_code=400,
+        )
     if not model:
-        return "未配置 AI 模型名，无法生成目标价分析。"
+        raise _service_error(
+            code="AI_MODEL_MISSING",
+            language=lang,
+            zh_text="未配置 AI 模型名，无法生成目标价分析。",
+            en_text="AI model is not configured; unable to generate target price analysis.",
+            status_code=400,
+        )
 
     external_search_context = _build_external_search_context(
         symbols=symbols,
@@ -3867,9 +4469,15 @@ def generate_target_price_analysis(
         tavily_api_key=tavily_api_key,
         lookback_days=45,
     )
-    prompt = _build_target_price_prompt(symbols, stocks, external_search_context=external_search_context)
+    prompt = _build_target_price_prompt(symbols, stocks, external_search_context=external_search_context, language=lang)
     if not prompt:
-        return "缺少可分析的股票上下文，无法生成目标价分析。"
+        raise _service_error(
+            code="STOCK_CONTEXT_MISSING",
+            language=lang,
+            zh_text="缺少可分析的股票上下文，无法生成目标价分析。",
+            en_text="Missing stock context; unable to generate target price analysis.",
+            status_code=400,
+        )
 
     full_text, err = _run_ai_with_auto_continue(
         provider=provider,
@@ -3879,13 +4487,29 @@ def generate_target_price_analysis(
         base_url=base_url,
         enable_model_search=not bool(str(external_search_context or "").strip()),
         continue_prompt=(
-            "你刚才的回答因为长度限制被截断了。请只继续未完成的部分，"
-            "不要重复已经写过的内容，并写到完整收尾。"
+            (
+                "Your previous answer was truncated by output length. Continue only the unfinished part, "
+                "do not repeat prior content, and complete the final closing."
+            )
+            if lang == "en"
+            else (
+                "你刚才的回答因为长度限制被截断了。请只继续未完成的部分，"
+                "不要重复已经写过的内容，并写到完整收尾。"
+            )
         ),
+        language=lang,
     )
     if err:
-        return err
-    return _ensure_reference_links(full_text, stocks=stocks) if full_text else "AI 返回为空。"
+        raise _runtime_ai_error_to_service_error(err, lang)
+    if not full_text:
+        raise _service_error(
+            code="AI_EMPTY_RESPONSE",
+            language=lang,
+            zh_text="AI 返回为空。",
+            en_text="AI returned empty content.",
+            status_code=502,
+        )
+    return _ensure_reference_links(full_text, stocks=stocks)
 
 
 def test_finnhub_api_key(api_key):

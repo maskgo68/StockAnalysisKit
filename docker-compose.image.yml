@@ -5,15 +5,17 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "${STOCKANALYSISKIT_PORT:-16888}:16888"
+      - "${STOCKANALYSISKIT_PORT:-16888}:${APP_PORT:-16888}"
     environment:
       TZ: Asia/Shanghai
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
       PYTHONIOENCODING: UTF-8
-      APP_PORT: 16888
+      APP_PORT: ${APP_PORT:-16888}
       STOCKANALYSISKIT_DB_PATH: /app/data/stockanalysiskit.db
-      STOCKANALYSISKIT_FIN_CACHE_TTL_HOURS: 12
+      LOG_DIR: /app/logs
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-3}
+      STOCKANALYSISKIT_FIN_CACHE_TTL_HOURS: ${STOCKANALYSISKIT_FIN_CACHE_TTL_HOURS:-12}
       GUNICORN_WORKERS: 2
       GUNICORN_THREADS: 4
       GUNICORN_TIMEOUT: 120
@@ -23,6 +25,7 @@ services:
       EXTERNAL_SEARCH_ITEMS_PER_STOCK: ${EXTERNAL_SEARCH_ITEMS_PER_STOCK:-10}
       EXA_API_KEY: ${EXA_API_KEY:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      DEFAULT_UI_LANGUAGE: ${DEFAULT_UI_LANGUAGE:-zh}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

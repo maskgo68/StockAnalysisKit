@@ -17,3 +17,4 @@ tests/
 run.out.log
 run.err.log
 AGENTS.md
+.claude/

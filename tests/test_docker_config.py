@@ -20,12 +20,58 @@ def test_compose_has_search_api_envs():
     assert "TAVILY_API_KEY" in compose
 
 
+def test_compose_has_default_ui_language_env():
+    compose = _read("docker-compose.yml")
+    assert "DEFAULT_UI_LANGUAGE: ${DEFAULT_UI_LANGUAGE:-zh}" in compose
+
+
+def test_compose_app_port_is_configurable():
+    compose = _read("docker-compose.yml")
+    assert "APP_PORT: ${APP_PORT:-16888}" in compose
+
+
+def test_compose_port_mapping_uses_app_port_env():
+    compose = _read("docker-compose.yml")
+    assert '${STOCKANALYSISKIT_PORT:-16888}:${APP_PORT:-16888}' in compose
+
+
+def test_compose_has_logging_envs():
+    compose = _read("docker-compose.yml")
+    assert "LOG_DIR: /app/logs" in compose
+    assert "LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-3}" in compose
+
+
+def test_image_compose_has_default_ui_language_env():
+    compose = _read("docker-compose.image.yml")
+    assert "DEFAULT_UI_LANGUAGE: ${DEFAULT_UI_LANGUAGE:-zh}" in compose
+
+
+def test_image_compose_app_port_is_configurable():
+    compose = _read("docker-compose.image.yml")
+    assert "APP_PORT: ${APP_PORT:-16888}" in compose
+
+
+def test_image_compose_port_mapping_uses_app_port_env():
+    compose = _read("docker-compose.image.yml")
+    assert '${STOCKANALYSISKIT_PORT:-16888}:${APP_PORT:-16888}' in compose
+
+
+def test_image_compose_has_logging_envs():
+    compose = _read("docker-compose.image.yml")
+    assert "LOG_DIR: /app/logs" in compose
+    assert "LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-3}" in compose
+
+
 def test_dockerfile_has_required_runtime_envs():
     dockerfile = _read("Dockerfile")
     assert "AI_AUTO_CONTINUE_MAX_ROUNDS" in dockerfile
     assert "AI_CLAUDE_MAX_TOKENS" in dockerfile
     assert "EXA_API_KEY" in dockerfile
     assert "TAVILY_API_KEY" in dockerfile
+    assert "DEFAULT_UI_LANGUAGE=zh" in dockerfile
+    assert "STOCKANALYSISKIT_FIN_CACHE_TTL_HOURS=12" in dockerfile
+    assert "LOG_DIR=/app/logs" in dockerfile
+    assert "LOG_RETENTION_DAYS=3" in dockerfile
 
 
 def test_dockerfile_enforces_utf8_runtime_locale():

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pandas as pd
+import requests
 
 import stock_service
 
@@ -157,3 +158,61 @@ def test_get_stock_bundle_uses_yfinance_realtime_when_finnhub_key_missing(monkey
     assert out["realtime"]["change_pct"] == 9.09
     assert out["realtime"]["market_cap_b"] == 500.0
     assert out["realtime"]["pe_ttm"] == 30.0
+
+
+def _http_error_with_status(code, message):
+    err = requests.HTTPError(message)
+    err.response = SimpleNamespace(status_code=code)
+    return err
+
+
+def test_get_stock_bundle_surfaces_http_status_in_warnings(monkeypatch):
+    monkeypatch.setattr(stock_service, "_finnhub_bundle", lambda symbol, api_key: {})
+    monkeypatch.setattr(stock_service, "_get_realtime_from_yfinance", lambda symbol: {"price": 100.0})
+    monkeypatch.setattr(
+        stock_service,
+        "get_cached_financial_bundle",
+        lambda symbol, ttl_hours=None: {"financial": {}, "ai_financial_context": {"annual": [], "quarterly": []}},
+    )
+    monkeypatch.setattr(
+        stock_service,
+        "_get_forecast_from_yahoo",
+        lambda symbol: (_ for _ in ()).throw(_http_error_with_status(429, "Too Many Requests")),
+    )
+    monkeypatch.setattr(
+        stock_service,
+        "_get_prediction_fields_from_yfinance",
+        lambda symbol: {
+            "currency": None,
+            "eps_forecast": None,
+            "next_year_eps_forecast": None,
+            "next_quarter_eps_forecast": None,
+            "next_earnings_date": None,
+        },
+    )
+    monkeypatch.setattr(stock_service, "_get_recent_news", lambda symbol, api_key, limit=5: [])
+    monkeypatch.setattr(
+        stock_service,
+        "_build_expectation_guidance_snapshot",
+        lambda symbol, news=None, **kwargs: {},
+    )
+
+    out = stock_service.get_stock_bundle("NVDA", "")
+
+    assert isinstance(out.get("warnings"), list)
+    assert any(item.get("source") == "yahoo.forecast" and item.get("status_code") == 429 for item in out["warnings"])
+
+
+def test_yahoo_quote_summary_collects_http_status(monkeypatch):
+    def _raise_http(*args, **kwargs):
+        raise _http_error_with_status(404, "Not Found")
+
+    monkeypatch.setattr(stock_service.requests, "get", _raise_http)
+    token = stock_service._start_issue_collection()
+    try:
+        out = stock_service._yahoo_quote_summary("NVDA", ["summaryDetail"])
+    finally:
+        issues = stock_service._finish_issue_collection(token)
+
+    assert out == {}
+    assert any(item.get("source") == "yahoo.quote_summary" and item.get("status_code") == 404 for item in issues)

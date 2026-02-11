@@ -7,8 +7,18 @@ from pathlib import Path
 from threading import Lock
 
 _DB_LOCK = Lock()
-_SYMBOL_PATTERN = re.compile(r"^[A-Z.\-]{1,10}$")
+_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 _INITIALIZED_DB_PATHS = set()
+_ANALYSIS_TYPES = {"ai", "financial"}
+_ANALYSIS_PLACEHOLDER_TEXTS = {
+    "analysis result",
+    "financial analysis",
+    "target analysis",
+    "target price analysis",
+    "financial result",
+    "ai followup",
+    "followup answer",
+}
 
 
 def _utc_now_iso():
@@ -44,6 +54,23 @@ def _normalize_symbols(symbols):
         if len(out) >= 10:
             break
     return out
+
+
+def _normalize_analysis_type(value):
+    raw = str(value or "").strip().lower()
+    return raw if raw in _ANALYSIS_TYPES else "ai"
+
+
+def _normalize_symbol(value):
+    symbol = str(value or "").strip().upper()
+    if not symbol or not _SYMBOL_PATTERN.match(symbol):
+        return None
+    return symbol
+
+
+def _is_placeholder_analysis_text(value):
+    text = str(value or "").strip().lower()
+    return text in _ANALYSIS_PLACEHOLDER_TEXTS
 
 
 def init_storage(db_path=None):
@@ -82,6 +109,38 @@ def init_storage(db_path=None):
                     payload_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS analysis_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    symbols_json TEXT NOT NULL,
+                    analysis_type TEXT NOT NULL,
+                    provider TEXT,
+                    model TEXT,
+                    language TEXT,
+                    analysis TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_analysis_history_symbol_created_at
+                ON analysis_history (symbol, created_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_analysis_history_created_at
+                ON analysis_history (created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS investment_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_investment_notes_symbol_created_at
+                ON investment_notes (symbol, created_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_investment_notes_created_at
+                ON investment_notes (created_at DESC);
                 """
             )
 
@@ -261,23 +320,6 @@ def delete_watchlist_entry(watchlist_id, db_path=None):
             conn.close()
 
 
-def get_watchlist_symbols(db_path=None):
-    # 兼容旧调用：返回最近一条自选组的 symbols。
-    items = list_watchlist_entries(limit=1, db_path=db_path)
-    if not items:
-        return {"symbols": [], "updated_at": None}
-    return {"symbols": items[0]["symbols"], "updated_at": items[0]["updated_at"]}
-
-
-def save_watchlist_symbols(symbols, db_path=None):
-    # 兼容旧调用：作为新一条自选组保存。
-    new_id = create_watchlist_entry(name=None, symbols=symbols, db_path=db_path)
-    item = get_watchlist_entry(new_id, db_path=db_path) if new_id else None
-    if not item:
-        return {"symbols": [], "updated_at": None}
-    return {"symbols": item["symbols"], "updated_at": item["updated_at"]}
-
-
 def get_cached_financial_bundle(symbol, ttl_hours=12, db_path=None):
     init_storage(db_path=db_path)
     if ttl_hours is not None and float(ttl_hours) <= 0:
@@ -348,3 +390,297 @@ def set_cached_financial_bundle(symbol, financial, ai_financial_context, db_path
             conn.commit()
         finally:
             conn.close()
+
+
+def _analysis_history_row_to_dict(row):
+    if not row:
+        return None
+    try:
+        symbols = _normalize_symbols(json.loads(str(row["symbols_json"] or "[]")))
+    except Exception:
+        symbols = []
+    return {
+        "id": int(row["id"]),
+        "symbol": str(row["symbol"] or "").strip().upper(),
+        "symbols": symbols,
+        "analysis_type": _normalize_analysis_type(row["analysis_type"]),
+        "provider": str(row["provider"] or "").strip() or None,
+        "model": str(row["model"] or "").strip() or None,
+        "language": str(row["language"] or "").strip() or None,
+        "analysis": str(row["analysis"] or "").strip(),
+        "created_at": row["created_at"],
+    }
+
+
+def create_analysis_history_entry(
+    symbols,
+    analysis_type,
+    analysis,
+    provider=None,
+    model=None,
+    language=None,
+    db_path=None,
+):
+    init_storage(db_path=db_path)
+
+    normalized_symbols = _normalize_symbols(symbols)
+    text = str(analysis or "").strip()
+    if not normalized_symbols or not text or _is_placeholder_analysis_text(text):
+        return 0
+
+    normalized_type = _normalize_analysis_type(analysis_type)
+    normalized_provider = str(provider or "").strip() or None
+    normalized_model = str(model or "").strip() or None
+    normalized_language = str(language or "").strip().lower() or None
+    if normalized_language and normalized_language not in {"zh", "en"}:
+        normalized_language = normalized_language[:2]
+    if normalized_language and normalized_language not in {"zh", "en"}:
+        normalized_language = None
+
+    ts = _utc_now_iso()
+    symbols_json = json.dumps(normalized_symbols, ensure_ascii=False)
+
+    inserted_count = 0
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            for symbol in normalized_symbols:
+                latest = conn.execute(
+                    """
+                    SELECT created_at
+                    FROM analysis_history
+                    WHERE symbol = ?
+                      AND analysis_type = ?
+                      AND analysis = ?
+                      AND COALESCE(provider, '') = ?
+                      AND COALESCE(model, '') = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (
+                        symbol,
+                        normalized_type,
+                        text,
+                        str(normalized_provider or ""),
+                        str(normalized_model or ""),
+                    ),
+                ).fetchone()
+                if latest:
+                    try:
+                        latest_at = datetime.fromisoformat(str(latest["created_at"]))
+                        if latest_at.tzinfo is None:
+                            latest_at = latest_at.replace(tzinfo=timezone.utc)
+                        now_at = datetime.fromisoformat(ts)
+                        if now_at - latest_at <= timedelta(minutes=5):
+                            continue
+                    except Exception:
+                        pass
+
+                conn.execute(
+                    """
+                    INSERT INTO analysis_history(
+                        symbol, symbols_json, analysis_type, provider, model, language, analysis, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        symbol,
+                        symbols_json,
+                        normalized_type,
+                        normalized_provider,
+                        normalized_model,
+                        normalized_language,
+                        text,
+                        ts,
+                    ),
+                )
+                inserted_count += 1
+            conn.commit()
+        finally:
+            conn.close()
+    return inserted_count
+
+
+def list_analysis_history_entries(symbol, analysis_type=None, limit=100, db_path=None):
+    init_storage(db_path=db_path)
+
+    target_symbol = str(symbol or "").strip().upper()
+    if not _SYMBOL_PATTERN.match(target_symbol):
+        return []
+
+    size = max(1, min(int(limit or 100), 500))
+    has_type_filter = str(analysis_type or "").strip().lower() in _ANALYSIS_TYPES
+    normalized_type = _normalize_analysis_type(analysis_type)
+
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            if has_type_filter:
+                rows = conn.execute(
+                    """
+                    SELECT id, symbol, symbols_json, analysis_type, provider, model, language, analysis, created_at
+                    FROM analysis_history
+                    WHERE symbol = ? AND analysis_type = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (target_symbol, normalized_type, size),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, symbol, symbols_json, analysis_type, provider, model, language, analysis, created_at
+                    FROM analysis_history
+                    WHERE symbol = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (target_symbol, size),
+                ).fetchall()
+        finally:
+            conn.close()
+    return [_analysis_history_row_to_dict(row) for row in rows]
+
+
+def list_analysis_history_symbols(limit=200, db_path=None):
+    init_storage(db_path=db_path)
+    size = max(1, min(int(limit or 200), 500))
+
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT symbol, COUNT(*) AS history_count, MAX(created_at) AS latest_created_at
+                FROM analysis_history
+                GROUP BY symbol
+                ORDER BY latest_created_at DESC, symbol ASC
+                LIMIT ?
+                """,
+                (size,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    return [
+        {
+            "symbol": str(row["symbol"] or "").strip().upper(),
+            "history_count": int(row["history_count"] or 0),
+            "latest_created_at": row["latest_created_at"],
+        }
+        for row in rows
+    ]
+
+
+def _investment_note_row_to_dict(row):
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "symbol": str(row["symbol"] or "").strip().upper(),
+        "content": str(row["content"] or "").strip(),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def create_investment_note(symbol, content, db_path=None):
+    init_storage(db_path=db_path)
+
+    target_symbol = _normalize_symbol(symbol)
+    text = str(content or "").strip()
+    if not target_symbol or not text:
+        return 0
+
+    ts = _utc_now_iso()
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO investment_notes(symbol, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (target_symbol, text, ts, ts),
+            )
+            new_id = int(cur.lastrowid)
+            conn.commit()
+        finally:
+            conn.close()
+    return new_id
+
+
+def list_investment_notes(symbol, limit=200, db_path=None):
+    init_storage(db_path=db_path)
+
+    target_symbol = _normalize_symbol(symbol)
+    if not target_symbol:
+        return []
+
+    size = max(1, min(int(limit or 200), 500))
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, symbol, content, created_at, updated_at
+                FROM investment_notes
+                WHERE symbol = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (target_symbol, size),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    return [_investment_note_row_to_dict(row) for row in rows]
+
+
+def delete_investment_note(note_id, db_path=None):
+    init_storage(db_path=db_path)
+    try:
+        target_id = int(note_id)
+    except Exception:
+        return False
+    if target_id <= 0:
+        return False
+
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            cur = conn.execute("DELETE FROM investment_notes WHERE id = ?", (target_id,))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def list_investment_note_symbols(limit=200, db_path=None):
+    init_storage(db_path=db_path)
+    size = max(1, min(int(limit or 200), 500))
+
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT symbol, COUNT(*) AS note_count, MAX(created_at) AS latest_created_at
+                FROM investment_notes
+                GROUP BY symbol
+                ORDER BY latest_created_at DESC, symbol ASC
+                LIMIT ?
+                """,
+                (size,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    return [
+        {
+            "symbol": str(row["symbol"] or "").strip().upper(),
+            "note_count": int(row["note_count"] or 0),
+            "latest_created_at": row["latest_created_at"],
+        }
+        for row in rows
+    ]

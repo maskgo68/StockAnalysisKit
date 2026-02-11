@@ -224,16 +224,50 @@ def test_get_financial_from_yfinance_skips_empty_latest_quarter(monkeypatch):
     assert result["eps"] == 0.75
 
 
-def test_get_forecast_from_yahoo_uses_yfinance_next_qtr_fallback(monkeypatch):
-    monkeypatch.setattr(stock_service, "_parse_yahoo_pages", lambda symbol: {"display_metrics": {}, "quote_summary": {}}, raising=False)
+def test_get_forecast_from_yahoo_uses_quote_summary_next_qtr_fallback(monkeypatch):
+    monkeypatch.setattr(
+        stock_service,
+        "_parse_yahoo_pages",
+        lambda symbol: {
+            "display_metrics": {},
+            "quote_summary": {},
+            "analysis_eps_trend": {"current_year_eps": None, "next_qtr_eps": None, "next_year_eps": None},
+        },
+        raising=False,
+    )
+
+    def _forbid_yfinance_eps_fallback(_symbol):
+        raise AssertionError("yfinance EPS fallback should not be called from _get_forecast_from_yahoo")
+
+    def _forbid_extra_analysis_request(_symbol):
+        raise AssertionError("analysis page should be reused instead of requesting twice")
+
+    monkeypatch.setattr(
+        stock_service,
+        "_yahoo_quote_summary",
+        lambda symbol, modules: {
+            "earningsTrend": {"trend": [{"period": "+1q", "epsEstimate": {"raw": 1.93}}]}
+        },
+        raising=False,
+    )
     monkeypatch.setattr(
         stock_service,
         "_extract_eps_trend_current_estimate",
-        lambda symbol: {"current_year_eps": None, "next_qtr_eps": None},
+        _forbid_extra_analysis_request,
         raising=False,
     )
-    monkeypatch.setattr(stock_service, "_yahoo_quote_summary", lambda symbol, modules: {}, raising=False)
-    monkeypatch.setattr(stock_service, "_extract_next_quarter_eps_from_yfinance", lambda symbol: 1.93, raising=False)
+    monkeypatch.setattr(
+        stock_service,
+        "_extract_next_quarter_eps_from_yfinance",
+        _forbid_yfinance_eps_fallback,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stock_service,
+        "_extract_next_year_eps_from_yfinance",
+        _forbid_yfinance_eps_fallback,
+        raising=False,
+    )
 
     out = stock_service._get_forecast_from_yahoo("TER")
 
@@ -273,7 +307,6 @@ def test_get_forecast_from_yahoo_includes_ev_ebitda_and_ps_from_display_metrics(
         }
 
     monkeypatch.setattr(stock_service, "_yahoo_quote_summary", fake_quote_summary, raising=False)
-    monkeypatch.setattr(stock_service, "_extract_next_quarter_eps_from_yfinance", lambda symbol: None, raising=False)
 
     out = stock_service._get_forecast_from_yahoo("NVDA")
 
@@ -300,8 +333,6 @@ def test_get_forecast_from_yahoo_falls_back_to_quote_summary_for_ev_ebitda_and_p
         },
         raising=False,
     )
-    monkeypatch.setattr(stock_service, "_extract_next_quarter_eps_from_yfinance", lambda symbol: None, raising=False)
-
     out = stock_service._get_forecast_from_yahoo("AMD")
 
     assert out["ev_to_ebitda"] == 19.88
@@ -334,8 +365,6 @@ def test_get_forecast_from_yahoo_includes_next_year_eps_forecast(monkeypatch):
         },
         raising=False,
     )
-    monkeypatch.setattr(stock_service, "_extract_next_quarter_eps_from_yfinance", lambda symbol: None, raising=False)
-
     out = stock_service._get_forecast_from_yahoo("NVDA")
 
     assert out["next_year_eps_forecast"] == 8.76
@@ -357,8 +386,6 @@ def test_get_forecast_from_yahoo_falls_back_to_quote_summary_next_year_eps(monke
         },
         raising=False,
     )
-    monkeypatch.setattr(stock_service, "_extract_next_quarter_eps_from_yfinance", lambda symbol: None, raising=False)
-
     out = stock_service._get_forecast_from_yahoo("AMD")
 
     assert out["next_year_eps_forecast"] == 9.12
@@ -486,6 +513,9 @@ def test_build_ai_financial_context_from_yfinance_uses_statement_frames(monkeypa
 
 
 def test_get_stock_bundle_uses_yfinance_for_financial(monkeypatch):
+    monkeypatch.setattr(stock_service, "get_cached_financial_bundle", lambda symbol, ttl_hours=12: None, raising=False)
+    monkeypatch.setattr(stock_service, "set_cached_financial_bundle", lambda symbol, financial, ctx: None, raising=False)
+
     expected_financial = {
         "latest_period": "2025-10-26",
         "latest_period_type": "quarterly",
@@ -538,8 +568,8 @@ def test_get_stock_bundle_uses_yfinance_for_financial(monkeypatch):
         lambda symbol: {
             "eps_forecast": 6.2,
             "next_year_eps_forecast": 7.4,
-            "next_quarter_eps_forecast": 1.75,
-            "next_earnings_date": "2026-02-26",
+            "next_quarter_eps_forecast": None,
+            "next_earnings_date": None,
         },
     )
     monkeypatch.setattr(stock_service, "_get_recent_news", lambda symbol, api_key, limit=5: [])
@@ -550,8 +580,8 @@ def test_get_stock_bundle_uses_yfinance_for_financial(monkeypatch):
     assert bundle["ai_financial_context"] == expected_ai_context
     assert bundle["forecast"]["eps_forecast"] == 6.2
     assert bundle["forecast"]["next_year_eps_forecast"] == 7.4
-    assert bundle["forecast"]["next_quarter_eps_forecast"] == 1.75
-    assert bundle["forecast"]["next_earnings_date"] == "2026-02-26"
+    assert bundle["forecast"]["next_quarter_eps_forecast"] == 1.7
+    assert bundle["forecast"]["next_earnings_date"] == "2026-02-20"
     assert "earnings_analysis" not in bundle
 
 
@@ -944,7 +974,7 @@ def test_build_ai_prompt_contains_financial_history_block():
     assert "AI Financial Context - Annual (3Y)" in prompt
     assert "AI Financial Context - Quarterly (4Q)" in prompt
     assert "2025-12-31" in prompt
-    assert "Revenue(B USD)=120.0" in prompt
+    assert "Revenue(B (Local Currency))=120.0" in prompt
 
 
 def test_build_target_price_prompt_requires_bull_base_bear_ranges():
@@ -1146,6 +1176,89 @@ def test_financial_analysis_prompt_requires_latest_report_and_next_quarter_revie
     assert "预期修正与财报评价（最新财报+下季度预测）" in prompt
     assert "- 最新财报与下季度财报预测（预期修正/超预期判断）:" in prompt
     assert "- 总体结论:" in prompt
+
+
+def test_normalize_ui_language_defaults_to_zh():
+    assert stock_service._normalize_ui_language(None) == "zh"
+    assert stock_service._normalize_ui_language("") == "zh"
+    assert stock_service._normalize_ui_language("en") == "en"
+    assert stock_service._normalize_ui_language("EN-us") == "en"
+    assert stock_service._normalize_ui_language("zh-CN") == "zh"
+    assert stock_service._normalize_ui_language("fr") == "zh"
+
+
+def test_build_ai_prompt_can_output_english():
+    stocks = [
+        {
+            "symbol": "NVDA",
+            "realtime": {"change_pct": 1.2, "change_5d_pct": 2.1, "change_20d_pct": 5.1, "change_250d_pct": 88.0, "pe_ttm": 45.2},
+            "forecast": {"forward_pe": 34.1, "peg": 1.9, "next_quarter_eps_forecast": 0.68, "next_earnings_date": "2026-02-26"},
+            "news": [],
+            "ai_financial_context": {"annual": [], "quarterly": []},
+        }
+    ]
+
+    prompt = stock_service._build_ai_prompt(["NVDA"], stocks, language="en")
+
+    assert "Output must be English Markdown" in prompt
+    assert "Core conclusion" in prompt
+    assert "## References" in prompt
+
+
+def test_build_financial_followup_prompt_can_output_english():
+    stocks = [
+        {
+            "symbol": "NVDA",
+            "financial": {"latest_period": "2025-12-31"},
+            "forecast": {"next_earnings_date": "2026-02-26"},
+            "ai_financial_context": {"annual": [], "quarterly": []},
+            "news": [],
+        }
+    ]
+
+    prompt = stock_service._build_financial_followup_prompt(
+        symbols=["NVDA"],
+        stocks=stocks,
+        base_analysis="Initial financial analysis",
+        history=[{"role": "user", "content": "Focus on margin first"}],
+        question="How large is AI revenue mix?",
+        language="en",
+    )
+
+    assert "Initial financial analysis" in prompt
+    assert "Latest question: How large is AI revenue mix?" in prompt
+    assert "Output in English Markdown" in prompt
+
+
+def test_call_openai_compatible_once_uses_english_system_prompt(monkeypatch):
+    captured = {}
+
+    class DummyResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["payload"] = json
+        return DummyResp()
+
+    monkeypatch.setattr(stock_service.requests, "post", fake_post, raising=False)
+
+    text, finish_reason = stock_service._call_openai_compatible_once(
+        prompt="test prompt",
+        api_key="k",
+        model="m",
+        base_url="https://api.openai.com/v1",
+        language="en",
+    )
+
+    system_text = captured["payload"]["messages"][0]["content"]
+    assert text == "ok"
+    assert finish_reason == "stop"
+    assert "Respond in English" in system_text
 
 
 def test_normalize_followup_history_filters_invalid_messages():

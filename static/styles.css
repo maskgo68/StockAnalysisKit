@@ -45,6 +45,30 @@ body::before {
   z-index: -1;
 }
 
+.lang-toggle {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 1200;
+  min-width: 66px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 76, 151, 0.35);
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.95) 0%, rgba(234, 242, 252, 0.95) 100%);
+  color: #16355a;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.25px;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(20, 51, 85, 0.16);
+}
+
+.lang-toggle:hover {
+  transform: translateY(-1px);
+  border-color: rgba(15, 76, 151, 0.55);
+}
+
 .container {
   width: min(1240px, 94vw);
   margin: 24px auto 56px;
@@ -294,8 +318,71 @@ h2 {
 
 .actions-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
+}
+
+.action-link {
+  height: 40px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  color: #fff;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  letter-spacing: 0.18px;
+  background: linear-gradient(120deg, #435e7e 0%, #6a88aa 100%);
+  box-shadow: 0 10px 20px rgba(45, 73, 108, 0.22);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.action-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(45, 73, 108, 0.28);
+  filter: saturate(1.05);
+}
+
+.compare-error-panel {
+  border: 1px solid rgba(190, 59, 59, 0.35);
+  border-radius: 12px;
+  background: linear-gradient(160deg, rgba(255, 243, 243, 0.94) 0%, rgba(255, 250, 250, 0.96) 100%);
+  padding: 10px 12px;
+}
+
+.compare-error-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compare-error-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #8f2323;
+}
+
+.compare-error-dismiss-btn {
+  height: 28px;
+  min-width: 84px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(143, 35, 35, 0.25);
+  background: linear-gradient(120deg, #a94c4c 0%, #c86767 100%);
+  box-shadow: 0 6px 14px rgba(153, 59, 59, 0.2);
+  font-size: 12px;
+}
+
+.compare-error-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: #7b2d2d;
+  line-height: 1.5;
+}
+
+.compare-error-list li + li {
+  margin-top: 4px;
 }
 
 input,
@@ -801,6 +888,174 @@ tr:last-child td {
   width: 100%;
 }
 
+.history-toolbar {
+  display: grid;
+  gap: 12px;
+}
+
+.history-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px 150px;
+  gap: 10px;
+}
+
+.history-symbols-list {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f9fbff;
+  padding: 9px;
+  min-height: 56px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.history-symbol-btn {
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid #bcd0e8;
+  background: #ffffff;
+  color: #1d446f;
+  font-size: 12px;
+  padding: 0 12px;
+  box-shadow: none;
+}
+
+.history-symbol-btn.active {
+  border-color: #2268ab;
+  background: linear-gradient(120deg, rgba(18, 102, 184, 0.14) 0%, rgba(18, 102, 184, 0.06) 100%);
+}
+
+.history-compare-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.history-compare-controls label {
+  font-size: 13px;
+  color: #2a496c;
+}
+
+.history-compare-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.history-compare-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.history-compare-meta {
+  font-size: 12px;
+  color: #607797;
+  margin-bottom: 6px;
+}
+
+.history-compare-card .md-preview {
+  margin-top: 0;
+  min-height: 220px;
+}
+
+.history-note-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px;
+  gap: 10px;
+  align-items: end;
+}
+
+#investment-note-history-panel {
+  margin-top: 10px;
+}
+
+.history-note-body {
+  margin-top: 10px;
+}
+
+.history-note-editor textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: #fbfdff;
+  color: #12304e;
+  padding: 10px 12px;
+  resize: vertical;
+  min-height: 92px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.history-note-editor textarea:focus {
+  outline: none;
+  border-color: #2b78c1;
+  box-shadow: 0 0 0 4px rgba(43, 120, 193, 0.14);
+  background: #fff;
+}
+
+.note-content {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  color: #345271;
+  line-height: 1.55;
+  white-space: normal;
+  overflow-x: auto;
+}
+
+.note-content p {
+  margin: 6px 0;
+}
+
+.note-content ul,
+.note-content ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.note-content li {
+  margin: 3px 0;
+}
+
+.note-content blockquote {
+  margin: 8px 0;
+  padding: 7px 10px;
+  border-left: 3px solid #8fb4e5;
+  background: #f5f9ff;
+  color: #355173;
+}
+
+.note-content code {
+  background: #edf4ff;
+  border: 1px solid #d6e5fb;
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.note-content pre {
+  background: #102034;
+  color: #dbe8ff;
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.note-content pre code {
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0;
+}
+
+.note-delete-btn {
+  min-width: 62px;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -815,6 +1070,14 @@ tr:last-child td {
 
 @media (max-width: 1100px) {
   .symbol-row {
+    grid-template-columns: 1fr;
+  }
+
+  .history-input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .history-note-editor {
     grid-template-columns: 1fr;
   }
 
@@ -850,6 +1113,11 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .history-compare-controls,
+  .history-compare-grid {
+    grid-template-columns: 1fr;
+  }
+
   .followup-row {
     grid-template-columns: 1fr;
   }
@@ -860,6 +1128,14 @@ tr:last-child td {
     right: 8px;
     max-width: none;
     font-size: 13px;
+  }
+
+  .lang-toggle {
+    top: 8px;
+    left: auto;
+    right: 8px;
+    min-width: 62px;
+    padding: 6px 9px;
   }
 
   h2 {

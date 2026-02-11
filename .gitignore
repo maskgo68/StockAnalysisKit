@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.pytest_cache/
 .venv/
 venv/
 .env
@@ -9,3 +10,7 @@ venv/
 data/
 run.out.log
 run.err.log
+logs/
+.claude/
+*.pid
+AGENTS.md

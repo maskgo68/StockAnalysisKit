@@ -1,0 +1,91 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>投资笔记/历史分析</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260210_24" />
+</head>
+<body class="history-page">
+  <button id="language-toggle-btn" class="lang-toggle" type="button">EN</button>
+  <div id="status" aria-live="polite"></div>
+
+  <main class="container">
+    <header class="hero">
+      <h1 id="history-title">投资笔记/历史分析</h1>
+      <p id="history-hint" class="hint">按股票代码查看每次 AI 分析结果，并对比任意两个时间点的结论变化。</p>
+      <div class="hero-tags">
+        <span id="history-tag-1">Per Symbol Timeline</span>
+        <span id="history-tag-2">Snapshot Compare</span>
+        <span id="history-tag-3">AI Memory</span>
+      </div>
+    </header>
+
+    <section class="toolbar history-toolbar">
+      <div class="history-input-row">
+        <input id="history-symbol-input" type="text" placeholder="输入股票代码，如 NVDA" autocomplete="off" />
+        <select id="history-type-select">
+          <option value="all">全部类型</option>
+          <option value="ai">投资建议</option>
+          <option value="financial">财报分析</option>
+        </select>
+        <button id="history-search-btn" type="button">查看历史</button>
+      </div>
+      <div id="history-symbols-list" class="history-symbols-list"></div>
+      <input id="default-ui-language" type="hidden" value="{{ default_ui_language }}" />
+    </section>
+
+    <section>
+      <h2 id="investment-note-title">投资笔记</h2>
+      <div class="history-note-editor">
+        <textarea id="investment-note-input" rows="4" placeholder="记录你对该股票的判断、仓位计划和风险点..."></textarea>
+        <button id="investment-note-save-btn" type="button">保存笔记</button>
+      </div>
+      <details id="investment-note-history-panel" class="insight-panel">
+        <summary id="investment-note-history-title">历史笔记（点击展开）</summary>
+        <div class="history-note-body">
+          <div id="investment-note-list" class="history-list"></div>
+        </div>
+      </details>
+    </section>
+
+    <section>
+      <details id="history-timeline-panel" class="insight-panel">
+        <summary id="history-list-title">分析时间线（点击展开）</summary>
+        <div id="history-list" class="history-list"></div>
+      </details>
+    </section>
+
+    <section>
+      <h2 id="history-compare-title">上次看法 vs 现在看法</h2>
+      <div class="history-compare-controls">
+        <label>
+          <span id="history-left-label">较早快照</span>
+          <select id="history-left-select"></select>
+        </label>
+        <label>
+          <span id="history-right-label">较新快照</span>
+          <select id="history-right-select"></select>
+        </label>
+      </div>
+      <div class="history-compare-grid">
+        <article class="history-compare-card">
+          <div id="history-left-meta" class="history-compare-meta"></div>
+          <div id="history-left-output" class="md-preview"></div>
+        </article>
+        <article class="history-compare-card">
+          <div id="history-right-meta" class="history-compare-meta"></div>
+          <div id="history-right-output" class="md-preview"></div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script src="{{ url_for('static', filename='history.js') }}?v=20260210_4"></script>
+</body>
+</html>

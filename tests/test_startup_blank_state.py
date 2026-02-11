@@ -19,6 +19,29 @@ def test_index_renders_empty_default_symbols():
     assert 'value=""' in html
 
 
+def test_index_renders_default_ui_language_from_env(monkeypatch):
+    monkeypatch.setenv("DEFAULT_UI_LANGUAGE", "en")
+    client = app.app.test_client()
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert 'id="default-ui-language"' in html
+    assert 'value="en"' in html
+
+
+def test_index_has_history_entry_link_in_new_tab():
+    client = app.app.test_client()
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert 'id="history-page-link"' in html
+    assert 'target="_blank"' in html
+    assert 'href="/history"' in html
+    assert "投资笔记/历史分析" in html
+
+
 def test_frontend_init_has_no_nvda_and_no_auto_fetch():
     js = Path("static/app.js").read_text(encoding="utf-8")
 
@@ -48,7 +71,9 @@ def test_frontend_js_has_valid_syntax():
 def test_frontend_text_is_not_mojibake():
     js = Path("static/app.js").read_text(encoding="utf-8")
 
-    assert "股价 (USD)" in js
+    assert "股票名称" in js
+    assert "交易日期" in js
+    assert "股价 (本币)" in js
     assert "添加股票" in js
     assert "请先添加至少1个股票代码。" in js
     assert "正在抓取股票数据..." in js
@@ -58,7 +83,55 @@ def test_frontend_text_is_not_mojibake():
 def test_frontend_status_time_uses_formatted_display():
     js = Path("static/app.js").read_text(encoding="utf-8")
 
-    assert 'status.textContent = `数据更新时间: ${fmtTime(data.generated_at)}`;' in js
+    assert 'status.textContent = t("status_data_time", { time: fmtTime(data.generated_at) });' in js
+
+
+def test_frontend_has_compare_error_panel_and_renderer():
+    html = Path("templates/index.html").read_text(encoding="utf-8")
+    js = Path("static/app.js").read_text(encoding="utf-8")
+
+    assert 'id="compare-error-panel"' in html
+    assert "function renderStockErrors(" in js
+    assert "state.stockErrors" in js
+
+
+def test_frontend_compare_error_panel_is_dismissible():
+    html = Path("templates/index.html").read_text(encoding="utf-8")
+    js = Path("static/app.js").read_text(encoding="utf-8")
+
+    assert 'id="compare-error-dismiss-btn"' in html
+    assert "compareErrorsDismissed" in js
+    assert 'document.getElementById("compare-error-dismiss-btn")' in js
+    assert "state.compareErrorsDismissed = true" in js
+    assert "if (state.compareErrorsDismissed)" in js
+
+
+def test_frontend_only_shows_warnings_when_stock_has_missing_display_data():
+    js = Path("static/app.js").read_text(encoding="utf-8")
+
+    assert "function stockHasMissingDisplayData(" in js
+    assert "const missingDataSymbols = buildMissingDataSymbolSet(stocks);" in js
+    assert "if (!hasMissingData) return;" in js
+
+
+def test_template_has_language_toggle_button():
+    html = Path("templates/index.html").read_text(encoding="utf-8")
+
+    assert 'id="language-toggle-btn"' in html
+
+
+def test_frontend_contains_language_switch_and_storage_key():
+    js = Path("static/app.js").read_text(encoding="utf-8")
+
+    assert "stockanalysiskit.ui_language" in js
+    assert "function applyLanguage(" in js
+    assert "language-toggle-btn" in js
+
+
+def test_frontend_sends_language_with_ai_requests():
+    js = Path("static/app.js").read_text(encoding="utf-8")
+
+    assert js.count("language: state.uiLanguage") >= 4
 
 
 def test_forecast_table_includes_ev_ebitda_and_ps_columns():
@@ -83,9 +156,9 @@ def test_prediction_table_contains_yfinance_eps_and_earnings_date_fields():
     js = Path("static/app.js").read_text(encoding="utf-8")
 
     assert "prediction: (stock && stock.forecast && typeof stock.forecast === \"object\") ? stock.forecast : {}" in js
-    assert "预测EPS(Current Year)" in js
-    assert "预测EPS(Next Year)" in js
-    assert "预测EPS(Next Quarter)" in js
+    assert "预测EPS(Current Year, 本币/股)" in js
+    assert "预测EPS(Next Year, 本币/股)" in js
+    assert "预测EPS(Next Quarter, 本币/股)" in js
     assert "下季度财报日期" in js
 
 
@@ -100,10 +173,10 @@ def test_template_has_collapsible_beat_miss_and_eps_trend_sections():
 def test_template_has_target_price_section_after_ai_analysis():
     html = Path("templates/index.html").read_text(encoding="utf-8")
 
-    idx_valuation = html.find("<h2>4) 估值</h2>")
-    idx_financial = html.find("<h2>5) 财务分析</h2>")
-    idx_ai = html.find("<h2>6) 投资建议</h2>")
-    idx_target_price = html.find("<h2>7) 目标价</h2>")
+    idx_valuation = html.find("4) 估值")
+    idx_financial = html.find("5) 财务分析")
+    idx_ai = html.find("6) 投资建议")
+    idx_target_price = html.find("7) 目标价")
 
     assert idx_valuation >= 0
     assert idx_financial > idx_valuation
@@ -127,7 +200,7 @@ def test_frontend_strips_reference_section_before_rendering():
     assert "function stripReferenceSection(markdownText)" in js
     assert "参考来源" in js
     assert "const cleaned = stripReferenceSection(markdownText);" in js
-    assert "renderMarkdownOutput(\"ai-output\", cleaned, \"无返回内容\")" in js
+    assert "renderMarkdownOutput(\"ai-output\", cleaned, t(\"markdown_empty\"))" in js
     assert "renderMarkdownOutput(\"earnings-output\", cleaned, emptyText)" in js
 
 
@@ -156,3 +229,63 @@ def test_capture_screen_disables_effects_for_readability():
     assert "animation: none !important;" in js
     assert "backdrop-filter: none !important;" in js
     assert "clonedStatus.style.display = \"none\";" in js
+
+
+def test_history_template_exists_with_compare_sections():
+    html = Path("templates/history.html").read_text(encoding="utf-8")
+
+    assert "<title>投资笔记/历史分析</title>" in html
+    assert 'id="history-title">投资笔记/历史分析<' in html
+    assert 'id="history-symbol-input"' in html
+    assert 'id="history-symbols-list"' in html
+    assert 'id="history-timeline-panel"' in html
+    timeline_panel_head = html.split('id="history-timeline-panel"', 1)[1].split(">", 1)[0]
+    assert "open" not in timeline_panel_head
+    assert 'id="investment-note-title"' in html
+    assert 'id="investment-note-history-panel"' in html
+    note_history_panel_head = html.split('id="investment-note-history-panel"', 1)[1].split(">", 1)[0]
+    assert "open" not in note_history_panel_head
+    assert 'id="investment-note-input"' in html
+    assert 'id="investment-note-save-btn"' in html
+    assert 'id="investment-note-history-title"' in html
+    assert 'id="investment-note-list"' in html
+    assert 'id="history-left-select"' in html
+    assert 'id="history-right-select"' in html
+
+
+def test_history_template_note_panel_comes_before_timeline_panel():
+    html = Path("templates/history.html").read_text(encoding="utf-8")
+    note_editor_idx = html.find('id="investment-note-input"')
+    note_history_idx = html.find('id="investment-note-history-panel"')
+    timeline_idx = html.find('id="history-timeline-panel"')
+
+    assert note_editor_idx >= 0
+    assert note_history_idx >= 0
+    assert timeline_idx >= 0
+    assert note_editor_idx < note_history_idx
+    assert note_history_idx < timeline_idx
+
+
+def test_history_frontend_js_has_valid_syntax():
+    result = subprocess.run(
+        ["node", "--check", "static/history.js"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_history_frontend_supports_note_delete():
+    js = Path("static/history.js").read_text(encoding="utf-8")
+
+    assert "async function deleteInvestmentNote(" in js
+    assert 'fetch(`/api/investment-notes/${encodeURIComponent(String(noteId))}`' in js
+    assert "note-delete-btn" in js
+
+
+def test_history_frontend_renders_note_markdown():
+    js = Path("static/history.js").read_text(encoding="utf-8")
+
+    assert "function renderMarkdownToElement(" in js
+    assert 'renderMarkdownToElement(content, String(item.content || "").trim())' in js
