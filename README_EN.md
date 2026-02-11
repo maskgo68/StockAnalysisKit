@@ -1,3 +1,5 @@
+🌐 Language: English | [中文](README.md)
+
 # StockAnalysisKit
 
 A US/global stock analysis tool that supports single-stock analysis and multi-stock comparison. It aggregates market data, financial snapshots, and valuation/forecast metrics, and uses AI to generate analysis reports.

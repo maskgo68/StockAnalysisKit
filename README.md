@@ -1,4 +1,4 @@
-[English](readme-en.md) | 中文
+🌐 Language: [English](README_EN.md) | 中文
 
 # StockAnalysisKit
 
